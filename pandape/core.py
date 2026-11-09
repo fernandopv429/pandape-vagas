@@ -272,10 +272,10 @@ EXTRAIR_DETALHE_JS = r"""
   const experiencias = [];
   for (let i = 0; i < cortes.length; i++) {
     const bloco = expTxt.slice(cortes[i], cortes[i + 1] ?? expTxt.length);
-    experiencias.push(limpar(bloco).slice(0, 400));
+    experiencias.push(limpar(bloco));
   }
 
-  const formacao = sec('DivStudiesContainer').slice(0, 800);
+  const formacao = sec('DivStudiesContainer');
 
   const bloqueado = /Visualizar dados de contato/i.test(corpoTexto);
   const emails = [...new Set((corpoTexto.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g) || []))];
