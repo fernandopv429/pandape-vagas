@@ -10,11 +10,14 @@ Xvfb "$DISPLAY" -screen 0 1440x900x24 &
 sleep 1
 
 echo "[entrypoint] subindo Chrome persistente (perfil em $CHROME_PROFILE_DIR, CDP só em localhost:9222)..."
+# --no-sandbox: o container roda como root, e o Chrome recusa iniciar como
+# root sem essa flag (sandbox do Chrome exige um usuário não-root).
 google-chrome-stable \
     --remote-debugging-port=9222 \
     --user-data-dir="$CHROME_PROFILE_DIR" \
     --no-first-run --no-default-browser-check \
     --disable-dev-shm-usage \
+    --no-sandbox \
     --start-maximized \
     "https://pandape.infojobs.com.br/Company/Candidate/IndexInfojobs" &
 sleep 2
