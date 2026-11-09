@@ -1,0 +1,17 @@
+services:
+  pandape:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+      - "6080:6080"
+    environment:
+      - VNC_PASSWORD=${VNC_PASSWORD}
+      - PANDAPE_API_KEY=${PANDAPE_API_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+    volumes:
+      - pandape_data:/data
+
+volumes:
+  pandape_data:
