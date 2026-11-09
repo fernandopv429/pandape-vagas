@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pandapé — Coleta de candidatos</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 920px; margin: 0 auto; padding: 24px 16px 80px; line-height: 1.4; }
+  h1 { font-size: 1.3rem; margin-bottom: 4px; }
+  p.hint { color: #777; font-size: 0.9rem; margin-top: 0; }
+  fieldset { border: 1px solid #8884; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  legend { font-weight: 600; padding: 0 6px; }
+  label { display: block; font-size: 0.85rem; margin: 10px 0 4px; }
+  input[type=text], input[type=number], input[type=password], select, textarea {
+    width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 6px;
+    border: 1px solid #8886; font-size: 0.95rem; background: transparent; color: inherit;
+  }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 160px; }
+  .checks { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+  .checks label { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; font-size: 0.9rem; }
+  .checks input { width: auto; }
+  button { background: #2563eb; color: #fff; border: none; padding: 10px 18px; border-radius: 8px;
+    font-size: 0.95rem; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.secondary { background: #6b7280; }
+  #status { margin-top: 16px; font-size: 0.9rem; white-space: pre-wrap; }
+  #status.erro { color: #dc2626; }
+  table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #8883; vertical-align: top; }
+  th { font-weight: 600; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 0.75rem; }
+  .pill.ok { background: #16a34a33; }
+  .pill.no { background: #8884; }
+  .acoes button { font-size: 0.8rem; padding: 4px 10px; margin-right: 4px; }
+  #jobId { font-family: monospace; }
+</style>
+</head>
+<body>
+  <h1>Pandapé — Coleta de candidatos</h1>
+  <p class="hint">Monta a busca/coleta sem precisar escrever JSON na mão. A chave de API fica salva só neste navegador.</p>
+
+  <fieldset>
+    <legend>Chave de API</legend>
+    <input type="password" id="apiKey" placeholder="X-API-Key">
+  </fieldset>
+
+  <form id="form">
+    <fieldset>
+      <legend>Busca</legend>
+      <label>Palavra(s)-chave (uma por linha)</label>
+      <textarea id="palavra" rows="2" placeholder="assistente administrativo">assistente</textarea>
+      <div class="row">
+        <div>
+          <label>Combinação</label>
+          <select id="match">
+            <option value="AllWords">Todas as palavras</option>
+            <option value="AnyWords">Qualquer uma</option>
+          </select>
+        </div>
+        <div>
+          <label>Páginas</label>
+          <input type="number" id="paginas" value="1" min="1" max="100">
+        </div>
+        <div>
+          <label>Por página</label>
+          <select id="porPagina">
+            <option>10</option><option>25</option><option>50</option><option selected>100</option>
+          </select>
+        </div>
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" id="todas"> Ignorar "páginas" e coletar tudo</label>
+        <label>até <input type="number" id="maxCandidatos" value="1000" min="1" max="10000" style="width:90px"> candidatos</label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Filtros (opcionais)</legend>
+      <div class="row">
+        <div>
+          <label>Estado (UF, separado por vírgula)</label>
+          <input type="text" id="estado" placeholder="SP, RJ">
+        </div>
+        <div>
+          <label>Área (separado por vírgula)</label>
+          <input type="text" id="area" placeholder="Administração" list="areas">
+          <datalist id="areas"></datalist>
+        </div>
+        <div>
+          <label>Cargo (código, separado por vírgula)</label>
+          <input type="text" id="cargo" placeholder="999552">
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Detalhes e dedup</legend>
+      <div class="checks">
+        <label><input type="checkbox" id="comDetalhes" checked> Abrir perfil de cada candidato</label>
+        <label><input type="checkbox" id="somenteComContato" checked> Só com telefone/e-mail</label>
+        <label><input type="checkbox" id="excluirUsados" checked> Não repetir quem já foi usado</label>
+      </div>
+      <label>Limitar quantos perfis abrir (vazio = todos os coletados)</label>
+      <input type="number" id="limiteDetalhes" min="1" placeholder="ex: 20">
+    </fieldset>
+
+    <button type="submit" id="btnColetar">Coletar</button>
+    <button type="button" id="btnBuscar" class="secondary">Só listar (rápido, sem abrir perfis)</button>
+  </form>
+
+  <div id="status"></div>
+  <div id="resultado"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const apiKeyInput = $('apiKey');
+apiKeyInput.value = localStorage.getItem('pandape_api_key') || '';
+apiKeyInput.addEventListener('change', () => localStorage.setItem('pandape_api_key', apiKeyInput.value));
+
+fetch('/filtros').then(r => r.json()).then(d => {
+  $('areas').innerHTML = (d.area?.opcoes || []).map(a => `<option value="${a}">`).join('');
+}).catch(() => {});
+
+function listaOuNull(valor) {
+  const itens = valor.split(',').map(s => s.trim()).filter(Boolean);
+  return itens.length ? itens : null;
+}
+
+function montarPedido() {
+  return {
+    palavra: $('palavra').value.split('\n').map(s => s.trim()).filter(Boolean),
+    match: $('match').value,
+    paginas: Number($('paginas').value) || 1,
+    por_pagina: Number($('porPagina').value),
+    todas: $('todas').checked,
+    max_candidatos: Number($('maxCandidatos').value) || 1000,
+    estado: listaOuNull($('estado').value),
+    area: listaOuNull($('area').value),
+    cargo: listaOuNull($('cargo').value)?.map(Number) || null,
+    com_detalhes: $('comDetalhes').checked,
+    somente_com_contato: $('somenteComContato').checked,
+    excluir_usados: $('excluirUsados').checked,
+    limite_detalhes: $('limiteDetalhes').value ? Number($('limiteDetalhes').value) : null,
+  };
+}
+
+function setStatus(texto, erro) {
+  const el = $('status');
+  el.textContent = texto;
+  el.className = erro ? 'erro' : '';
+}
+
+function mostrarResultado(resultado) {
+  const candidatos = resultado.candidatos || [];
+  const linhas = candidatos.map(c => {
+    const ct = c.contato || {};
+    const temContato = ct.telefone || ct.email || ct.whatsapp;
+    return `<tr>
+      <td>${c.perfil || c.cargo_atual || '—'}</td>
+      <td>${c.cargo_atual || '—'}</td>
+      <td>${c.cidade || ''} ${c.uf || ''}</td>
+      <td>${temContato ? `<span class="pill ok">${ct.telefone || ''} ${ct.email || ''}</span>` : '<span class="pill no">bloqueado</span>'}</td>
+      <td class="acoes">
+        <a href="${c.link_curriculo}" target="_blank">perfil</a>
+        ${c.id ? `<button onclick="marcarUsado('${c.id}')">marcar usado</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+  $('resultado').innerHTML = `
+    <p><strong>${resultado.coletados ?? candidatos.length}</strong> coletados
+       ${resultado.excluidos_ja_usados ? `, ${resultado.excluidos_ja_usados} já usados (fora)` : ''}
+       — total no site: ${resultado.total_no_site ?? '?'}
+       ${resultado.dedup_ativo === false ? ' <span class="pill no">dedup desligado</span>' : ''}
+    </p>
+    <table><thead><tr><th>Nome/perfil</th><th>Cargo</th><th>Cidade</th><th>Contato</th><th></th></tr></thead>
+    <tbody>${linhas || '<tr><td colspan=5>Nenhum candidato.</td></tr>'}</tbody></table>`;
+}
+
+async function marcarUsado(id) {
+  const apiKey = apiKeyInput.value;
+  await fetch('/candidatos/marcar-usado', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+    body: JSON.stringify({ ids: [id], contexto: 'marcado pela tela' }),
+  });
+  event.target.textContent = 'usado ✓';
+  event.target.disabled = true;
+}
+
+async function buscarRapido() {
+  const apiKey = apiKeyInput.value;
+  if (!apiKey) return setStatus('Preencha a chave de API.', true);
+  const p = montarPedido();
+  if (p.paginas > 5) return setStatus('Busca rápida aceita no máximo 5 páginas — use "Coletar" pra mais.', true);
+  setStatus('Buscando...');
+  $('resultado').innerHTML = '';
+  const qs = new URLSearchParams({
+    palavra: p.palavra[0] || '', paginas: p.paginas, por_pagina: p.por_pagina,
+    match: p.match, excluir_usados: p.excluir_usados,
+  });
+  try {
+    const res = await fetch('/buscar?' + qs.toString(), { headers: { 'X-API-Key': apiKey } });
+    const data = await res.json();
+    if (!res.ok) return setStatus('Erro: ' + (data.detail || JSON.stringify(data)), true);
+    setStatus('Pronto.');
+    mostrarResultado(data);
+  } catch (e) {
+    setStatus('Falha de conexão: ' + e.message, true);
+  }
+}
+
+async function coletar() {
+  const apiKey = apiKeyInput.value;
+  if (!apiKey) return setStatus('Preencha a chave de API.', true);
+  setStatus('Disparando coleta...');
+  $('resultado').innerHTML = '';
+  let jobId;
+  try {
+    const res = await fetch('/coletar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+      body: JSON.stringify(montarPedido()),
+    });
+    const data = await res.json();
+    if (!res.ok) return setStatus('Erro: ' + (data.detail || JSON.stringify(data)), true);
+    jobId = data.job_id;
+  } catch (e) {
+    return setStatus('Falha de conexão: ' + e.message, true);
+  }
+
+  while (true) {
+    await new Promise(r => setTimeout(r, 3000));
+    const res = await fetch(`/job/${jobId}`, { headers: { 'X-API-Key': apiKey } });
+    const job = await res.json();
+    if (job.status === 'rodando' || job.status === 'na_fila') {
+      const prog = job.progresso ? ` — ${job.progresso.fase}: ${job.progresso.processados}/${job.progresso.total}` : '';
+      setStatus(`job ${jobId}: ${job.status}${prog}`);
+      continue;
+    }
+    if (job.status === 'erro') {
+      setStatus(`job ${jobId}: erro — ${job.erro}`, true);
+      return;
+    }
+    setStatus(`job ${jobId}: concluído` + (job.webhook ? ` — webhook: ${job.webhook.enviado ? 'enviado' : 'falhou (' + (job.webhook.erro || job.webhook.motivo) + ')'}` : ''));
+    mostrarResultado(job.resultado);
+    return;
+  }
+}
+
+$('form').addEventListener('submit', (e) => { e.preventDefault(); coletar(); });
+$('btnBuscar').addEventListener('click', buscarRapido);
+</script>
+</body>
+</html>

@@ -5,6 +5,7 @@ Como uma coleta grande leva minutos, ela roda como JOB: você dispara e depois
 consulta o resultado — sem timeout de requisição.
 
 Endpoints:
+    GET  /                             formulário web (montar busca/coleta sem JSON na mão)
     GET  /health                       estado da API, sessão salva e banco de dedup
     POST /coletar                      inicia um job de coleta -> {job_id}
     GET  /job/{job_id}                 status + resultado do job
@@ -49,9 +50,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from pandape import core, db
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 STORAGE_STATE = Path(os.environ.get("PANDAPE_STORAGE_STATE", str(core.STORAGE_STATE)))
 RESULTADOS_DIR = core.PROJECT_ROOT / "data" / "resultados"
@@ -229,6 +233,12 @@ def _rodar_coleta(job_id: str, pedido: ColetaPedido):
     except Exception as exc:  # noqa: BLE001 — queremos registrar qualquer falha no job
         _atualizar(job_id, status="erro", erro=str(exc),
                    tipo_erro="falha", traceback=traceback.format_exc())
+
+
+@app.get("/")
+def pagina_inicial():
+    """Formulário web pra montar buscas/coletas sem escrever JSON na mão."""
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/health")
