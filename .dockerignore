@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.env
+data/pandape_storage_state.json
+data/playwright-output/
+data/resultados/
+data/api.log
+data/ngrok.log

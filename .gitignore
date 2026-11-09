@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Sessão do navegador (cookies de login do Pandapé) e saídas da coleta
+data/pandape_storage_state.json
+data/playwright-output/
+data/resultados/
+data/*.log
+
+# Config local do MCP do Playwright (caminhos específicos desta máquina)
+.mcp.json
