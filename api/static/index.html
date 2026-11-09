@@ -121,6 +121,20 @@
   <div id="status"></div>
   <div id="resultado"></div>
 
+  <fieldset>
+    <legend>Buscar no banco já salvo (sem consultar o Pandapé)</legend>
+    <div class="row">
+      <div style="flex:3">
+        <label>Telefone, e-mail ou WhatsApp</label>
+        <input type="text" id="buscaContato" placeholder="ex: 11955919872 ou nome@email.com">
+      </div>
+      <div style="flex:1; display:flex; align-items:flex-end">
+        <button type="button" id="btnBuscaContato" style="width:100%">Buscar</button>
+      </div>
+    </div>
+    <div id="resultadoBusca"></div>
+  </fieldset>
+
 <script>
 const $ = (id) => document.getElementById(id);
 const apiKeyInput = $('apiKey');
@@ -266,8 +280,40 @@ async function coletar() {
   }
 }
 
+async function buscarContatoSalvo() {
+  const apiKey = apiKeyInput.value;
+  const valor = $('buscaContato').value.trim();
+  const alvo = $('resultadoBusca');
+  if (!apiKey) { alvo.innerHTML = '<p class="erro">Preencha a chave de API.</p>'; return; }
+  if (!valor) { alvo.innerHTML = ''; return; }
+  alvo.innerHTML = '<p>Buscando...</p>';
+  try {
+    const res = await fetch('/candidatos/buscar?' + new URLSearchParams({ contato: valor }),
+      { headers: { 'X-API-Key': apiKey } });
+    const rows = await res.json();
+    if (!res.ok) { alvo.innerHTML = `<p class="erro">Erro: ${rows.detail || JSON.stringify(rows)}</p>`; return; }
+    if (!rows.length) { alvo.innerHTML = '<p>Nada encontrado no banco salvo.</p>'; return; }
+    alvo.innerHTML = `<table><thead><tr><th>Nome/perfil</th><th>Cargo</th><th>Contato</th><th>Usado</th><th></th></tr></thead>
+      <tbody>${rows.map(r => {
+        const c = r.dados || {};
+        const ct = c.contato || {};
+        return `<tr>
+          <td>${c.perfil || c.cargo_atual || '—'}</td>
+          <td>${c.cargo_atual || '—'}</td>
+          <td>${ct.telefone || ''} ${ct.email || ''}</td>
+          <td>${r.usado ? `<span class="pill ok">sim${r.contexto ? ' — ' + r.contexto : ''}</span>` : '<span class="pill no">não</span>'}</td>
+          <td><a href="${c.link_curriculo || '#'}" target="_blank">perfil</a></td>
+        </tr>`;
+      }).join('')}</tbody></table>`;
+  } catch (e) {
+    alvo.innerHTML = `<p class="erro">Falha de conexão: ${e.message}</p>`;
+  }
+}
+
 $('form').addEventListener('submit', (e) => { e.preventDefault(); coletar(); });
 $('btnBuscar').addEventListener('click', buscarRapido);
+$('btnBuscaContato').addEventListener('click', buscarContatoSalvo);
+$('buscaContato').addEventListener('keydown', (e) => { if (e.key === 'Enter') buscarContatoSalvo(); });
 </script>
 </body>
 </html>

@@ -124,3 +124,20 @@ def listar(usado: bool | None = None, limite: int = 100, offset: int = 0) -> lis
                 (usado, limite, offset),
             ).fetchall()
     return rows
+
+
+def buscar_por_contato(valor: str, limite: int = 50) -> list[dict]:
+    """Procura candidatos já salvos cujo telefone, e-mail ou WhatsApp bate com
+    `valor` (parcial, ignora maiúsculas/formatação) — sem consultar o Pandapé.
+    Só dá match em quem já foi coletado com `com_detalhes`/listagem incluindo
+    contato (o dado inteiro do candidato é pesquisado como texto).
+    """
+    valor = valor.strip()
+    if not valor:
+        return []
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM candidatos WHERE dados::text ILIKE %s ORDER BY ultima_vista_em DESC LIMIT %s",
+            (f"%{valor}%", limite),
+        ).fetchall()
+    return rows

@@ -14,6 +14,7 @@ Endpoints:
     POST /candidatos/marcar-usado      marca candidato(s) como usados com sucesso
     POST /candidatos/desmarcar         reverte a marca de usado
     GET  /candidatos                   lista candidatos já salvos no banco local
+    GET  /candidatos/buscar?contato=.. procura no banco por telefone/e-mail (sem consultar o Pandapé)
 
 Subir (nesta máquina):
     .venv/bin/python -m uvicorn api.main:app --port 8090
@@ -427,5 +428,18 @@ def listar_candidatos(usado: bool | None = None, limite: int = 100, offset: int 
         raise HTTPException(503, "DATABASE_URL não configurada — sem banco de dedup.")
     try:
         return db.listar(usado=usado, limite=limite, offset=offset)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"falha ao consultar o banco: {exc}")
+
+
+@app.get("/candidatos/buscar", dependencies=[Depends(exigir_chave)])
+def buscar_candidato_por_contato(contato: str, limite: int = 50):
+    """Procura no banco já salvo (sem consultar o Pandapé) candidatos cujo
+    telefone, e-mail ou WhatsApp bate com `contato` — útil pra checar se um
+    lead específico já foi coletado antes."""
+    if not DB_DISPONIVEL:
+        raise HTTPException(503, "DATABASE_URL não configurada — sem banco de dedup.")
+    try:
+        return db.buscar_por_contato(contato, limite=limite)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"falha ao consultar o banco: {exc}")
