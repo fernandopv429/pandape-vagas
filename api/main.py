@@ -283,17 +283,32 @@ def pagina_inicial():
 
 @app.get("/health")
 def health():
-    existe = STORAGE_STATE.exists()
     info = {
         "status": "ok",
-        "sessao_salva": existe,
-        "arquivo_sessao": str(STORAGE_STATE),
         "headless": HEADLESS,
         "cdp": CDP,
         "jobs_em_memoria": len(_jobs),
         "dedup_banco_configurado": DB_DISPONIVEL,
         "webhook_configurado": bool(WEBHOOK_URL),
     }
+
+    if CDP:
+        # Em modo CDP a sessão vive só no perfil do Chrome persistente, não
+        # em arquivo — aqui só confirmamos que o Chrome está de pé e
+        # respondendo. Login de fato só se confirma tentando uma busca real
+        # (GET /buscar) — não dá pra saber com certeza sem navegar até o site.
+        try:
+            with urllib.request.urlopen(f"{CDP}/json/version", timeout=5) as resp:
+                info["chrome_cdp_respondendo"] = resp.status == 200
+        except Exception as exc:  # noqa: BLE001
+            info["status"] = "chrome_indisponivel"
+            info["chrome_cdp_respondendo"] = False
+            info["dica"] = f"Chrome via CDP não respondeu: {exc}"
+        return info
+
+    existe = STORAGE_STATE.exists()
+    info["sessao_salva"] = existe
+    info["arquivo_sessao"] = str(STORAGE_STATE)
     if existe:
         idade_s = datetime.now().timestamp() - STORAGE_STATE.stat().st_mtime
         info["sessao_idade_horas"] = round(idade_s / 3600, 1)

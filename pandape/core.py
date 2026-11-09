@@ -610,7 +610,14 @@ def executar_coleta(palavras, paginas=1, por_pagina=100, todas=False, max_candid
         candidatos = busca["candidatos"]
 
         if com_detalhes:
-            detalhes = coletar_detalhes(context, candidatos,
+            # Quando só queremos quem tem contato, filtra ANTES de abrir os
+            # detalhes — senão `limite_detalhes` desperdiça abertura de perfil
+            # em quem vai ser descartado no final, e quem sobrevive ao filtro
+            # pode acabar sem currículo nenhum (só os dados da listagem).
+            alvo_detalhes = candidatos
+            if somente_com_contato:
+                alvo_detalhes = [c for c in candidatos if c.get("telefone") or c.get("email") or c.get("whatsapp")]
+            detalhes = coletar_detalhes(context, alvo_detalhes,
                                         limite=limite_detalhes, progresso=progresso)
             por_id = {d.get("idCandidato"): d for d in detalhes}
             for cand in candidatos:
