@@ -30,9 +30,11 @@ DATABASE_URL configurada, a API funciona normal, só sem esse dedup.
 
 Webhook: toda coleta concluída via POST /coletar manda os candidatos (já
 filtrados pelo dedup) pra WEBHOOK_URL (.env), por exemplo um Webhook Trigger
-do n8n. O resultado do envio fica em job.webhook (GET /job/{job_id}). Sem
-WEBHOOK_URL configurada, a coleta funciona normal, só não envia pra lugar
-nenhum automaticamente.
+do n8n — em LOTES (WEBHOOK_BATCH_SIZE, padrão 20; ou por pedido, campo
+webhook_lote), pra não mandar um JSON gigante de uma coleta grande numa
+chamada só. O resultado do envio (quantos lotes, erros por lote) fica em
+job.webhook (GET /job/{job_id}). Sem WEBHOOK_URL configurada, a coleta
+funciona normal, só não envia pra lugar nenhum automaticamente.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ import hmac
 import json
 import os
 import threading
+import time
 import traceback
 import urllib.error
 import urllib.request
@@ -66,23 +69,14 @@ CDP = os.environ.get("PANDAPE_CDP") or None
 API_KEY = os.environ.get("PANDAPE_API_KEY") or None
 # Webhook (ex: n8n) que recebe os candidatos de cada coleta concluída.
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL") or None
+# Quantos candidatos vão por chamada de webhook (padrão, pode ser sobrescrito
+# por pedido) — evita mandar um JSON gigante numa coleta grande de uma vez.
+WEBHOOK_BATCH_SIZE_PADRAO = int(os.environ.get("WEBHOOK_BATCH_SIZE", "20"))
 
 DB_DISPONIVEL = bool(db.DATABASE_URL)
 
 
-def _enviar_webhook(job_id: str, resultado: dict) -> dict:
-    """Manda os candidatos coletados (já filtrados pelo dedup) pro webhook
-    configurado. Não derruba o job se o webhook falhar — só registra o erro.
-    """
-    if not WEBHOOK_URL:
-        return {"enviado": False, "motivo": "WEBHOOK_URL não configurada"}
-    payload = {
-        "job_id": job_id,
-        "enviado_em": agora(),
-        "palavras": resultado.get("palavras"),
-        "total_candidatos": len(resultado.get("candidatos", [])),
-        "candidatos": resultado.get("candidatos", []),
-    }
+def _enviar_lote_webhook(payload: dict) -> dict:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         WEBHOOK_URL, data=body, method="POST",
@@ -94,6 +88,49 @@ def _enviar_webhook(job_id: str, resultado: dict) -> dict:
         return {"enviado": False, "status_http": exc.code, "erro": exc.read().decode(errors="replace")[:500]}
     except Exception as exc:  # noqa: BLE001 — webhook fora do ar não pode derrubar o job
         return {"enviado": False, "erro": str(exc)}
+
+
+def _enviar_webhook(job_id: str, resultado: dict, tamanho_lote: int) -> dict:
+    """Manda os candidatos coletados (já filtrados pelo dedup) pro webhook
+    configurado, em lotes de `tamanho_lote` — evita mandar um JSON gigante
+    numa coleta grande de uma vez só. Não derruba o job se o webhook falhar
+    (num lote ou em todos) — só registra o que deu certo e o que não deu.
+    """
+    if not WEBHOOK_URL:
+        return {"enviado": False, "motivo": "WEBHOOK_URL não configurada"}
+
+    candidatos = resultado.get("candidatos", [])
+    if not candidatos:
+        return {"enviado": True, "lotes_total": 0, "lotes_enviados": 0}
+
+    lotes = [candidatos[i:i + tamanho_lote] for i in range(0, len(candidatos), tamanho_lote)]
+    lotes_enviados = 0
+    erros = []
+    for i, lote in enumerate(lotes, 1):
+        payload = {
+            "job_id": job_id,
+            "enviado_em": agora(),
+            "palavras": resultado.get("palavras"),
+            "lote": i,
+            "lotes_total": len(lotes),
+            "candidatos_no_lote": len(lote),
+            "total_candidatos": len(candidatos),
+            "candidatos": lote,
+        }
+        resp = _enviar_lote_webhook(payload)
+        if resp.get("enviado"):
+            lotes_enviados += 1
+        else:
+            erros.append({"lote": i, **resp})
+        if i < len(lotes):
+            time.sleep(0.3)  # não martela o webhook em sequência rápida demais
+
+    return {
+        "enviado": lotes_enviados == len(lotes),
+        "lotes_total": len(lotes),
+        "lotes_enviados": lotes_enviados,
+        "erros": erros or None,
+    }
 
 
 def _persistir_e_filtrar(resultado: dict, excluir_usados: bool) -> dict:
@@ -174,6 +211,9 @@ class ColetaPedido(BaseModel):
         True, description="Retornar só candidatos com telefone/e-mail/WhatsApp")
     excluir_usados: bool = Field(
         True, description="Não devolver candidatos já marcados como usados com sucesso antes")
+    webhook_lote: int = Field(
+        WEBHOOK_BATCH_SIZE_PADRAO, ge=1, le=500,
+        description="Quantos candidatos por chamada de webhook (evita um JSON gigante numa coleta grande)")
     # filtros (opcionais)
     estado: list[str] | None = Field(
         None, description="UF por sigla ou nome, ex.: ['GO'] ou ['Goiás','SP']")
@@ -218,7 +258,7 @@ def _rodar_coleta(job_id: str, pedido: ColetaPedido):
             progresso=progresso,
         )
         resultado = _persistir_e_filtrar(resultado, pedido.excluir_usados)
-        webhook = _enviar_webhook(job_id, resultado)
+        webhook = _enviar_webhook(job_id, resultado, pedido.webhook_lote)
         _atualizar(job_id, status="concluido", resultado=resultado, webhook=webhook)
         try:  # persiste em disco para inspeção/histórico
             RESULTADOS_DIR.mkdir(parents=True, exist_ok=True)

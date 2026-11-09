@@ -116,22 +116,29 @@ normal, só sem esse dedup.
 
 Toda coleta concluída (`POST /coletar`) manda os candidatos coletados (já
 sem os que já foram usados) pra `WEBHOOK_URL` do `.env`, por exemplo um nó
-Webhook do n8n. O payload:
+Webhook do n8n — **em lotes**, não tudo de uma vez: `WEBHOOK_BATCH_SIZE`
+(`.env`, padrão 20) define quantos candidatos vão por chamada, evitando um
+JSON gigante numa coleta grande. Dá pra sobrescrever por pedido com o campo
+`webhook_lote`. Cada lote é uma chamada POST separada:
 
 ```json
 {
   "job_id": "ab12cd34ef56",
   "enviado_em": "2026-11-09T16:40:00+00:00",
   "palavras": ["assistente"],
-  "total_candidatos": 9,
-  "candidatos": [ /* mesma estrutura de /buscar */ ]
+  "lote": 1,
+  "lotes_total": 3,
+  "candidatos_no_lote": 20,
+  "total_candidatos": 47,
+  "candidatos": [ /* até 20 candidatos, mesma estrutura de /buscar */ ]
 }
 ```
 
-O resultado do envio (sucesso/erro) fica em `job.webhook` — consulte em
-`GET /job/{job_id}`. Se o webhook falhar ou estiver fora do ar, a coleta
-continua normal (só não entrega pra esse destino). Sem `WEBHOOK_URL`
-configurada, não envia pra lugar nenhum.
+O resultado do envio fica em `job.webhook` — consulte em `GET /job/{job_id}`:
+`lotes_total`, `lotes_enviados` e, se algum lote falhar, `erros` com o
+detalhe de qual lote e por quê. Se um lote falhar, os outros continuam sendo
+enviados normalmente — a coleta nunca trava por causa disso. Sem
+`WEBHOOK_URL` configurada, não envia pra lugar nenhum.
 
 Exemplo de coleta:
 

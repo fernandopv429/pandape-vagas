@@ -102,8 +102,16 @@
         <label><input type="checkbox" id="somenteComContato" checked> Só com telefone/e-mail</label>
         <label><input type="checkbox" id="excluirUsados" checked> Não repetir quem já foi usado</label>
       </div>
-      <label>Limitar quantos perfis abrir (vazio = todos os coletados)</label>
-      <input type="number" id="limiteDetalhes" min="1" placeholder="ex: 20">
+      <div class="row">
+        <div>
+          <label>Limitar quantos perfis abrir (vazio = todos os coletados)</label>
+          <input type="number" id="limiteDetalhes" min="1" placeholder="ex: 20">
+        </div>
+        <div>
+          <label>Candidatos por chamada de webhook</label>
+          <input type="number" id="webhookLote" min="1" max="500" placeholder="padrão: 20">
+        </div>
+      </div>
     </fieldset>
 
     <button type="submit" id="btnColetar">Coletar</button>
@@ -143,6 +151,7 @@ function montarPedido() {
     somente_com_contato: $('somenteComContato').checked,
     excluir_usados: $('excluirUsados').checked,
     limite_detalhes: $('limiteDetalhes').value ? Number($('limiteDetalhes').value) : null,
+    ...($('webhookLote').value ? { webhook_lote: Number($('webhookLote').value) } : {}),
   };
 }
 
@@ -211,6 +220,14 @@ async function buscarRapido() {
   }
 }
 
+function formatarWebhook(webhook) {
+  if (!webhook.lotes_total) return webhook.enviado ? 'enviado' : 'falhou (' + (webhook.erro || webhook.motivo) + ')';
+  const base = `${webhook.lotes_enviados}/${webhook.lotes_total} lote(s) enviados`;
+  if (webhook.enviado) return base;
+  const detalhe = (webhook.erros || []).map(e => `lote ${e.lote}: ${e.erro || e.motivo}`).join('; ');
+  return `${base} — com erro: ${detalhe}`;
+}
+
 async function coletar() {
   const apiKey = apiKeyInput.value;
   if (!apiKey) return setStatus('Preencha a chave de API.', true);
@@ -243,7 +260,7 @@ async function coletar() {
       setStatus(`job ${jobId}: erro — ${job.erro}`, true);
       return;
     }
-    setStatus(`job ${jobId}: concluído` + (job.webhook ? ` — webhook: ${job.webhook.enviado ? 'enviado' : 'falhou (' + (job.webhook.erro || job.webhook.motivo) + ')'}` : ''));
+    setStatus(`job ${jobId}: concluído` + (job.webhook ? ` — webhook: ${formatarWebhook(job.webhook)}` : ''));
     mostrarResultado(job.resultado);
     return;
   }

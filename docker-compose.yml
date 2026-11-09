@@ -10,6 +10,7 @@ services:
       - PANDAPE_API_KEY=${PANDAPE_API_KEY}
       - DATABASE_URL=${DATABASE_URL}
       - WEBHOOK_URL=${WEBHOOK_URL}
+      - WEBHOOK_BATCH_SIZE=${WEBHOOK_BATCH_SIZE:-20}
     volumes:
       - pandape_data:/data
 
