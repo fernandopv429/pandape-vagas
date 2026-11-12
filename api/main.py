@@ -11,6 +11,8 @@ Endpoints:
     GET  /job/{job_id}                 status + resultado do job
     GET  /jobs                         lista os jobs desta execução
     GET  /buscar?palavra=...           busca rápida e SÍNCRONA (só a lista, 1 página)
+    GET  /vagas/buscar?palavra_chave=  acha um processo seletivo (vaga) já publicado pelo título/referência
+    POST /vagas/coletar                coleta quem se candidatou a uma vaga -> {job_id} (mesmo padrão de /coletar)
     POST /candidatos/marcar-usado      marca candidato(s) como usados com sucesso
     POST /candidatos/desmarcar         reverte a marca de usado
     GET  /candidatos                   lista candidatos já salvos no banco local
@@ -29,9 +31,9 @@ usado via POST /candidatos/marcar-usado — assim o mesmo candidato não volta
 numa busca futura depois que você já fez algo com sucesso com ele. Sem
 DATABASE_URL configurada, a API funciona normal, só sem esse dedup.
 
-Webhook: toda coleta concluída via POST /coletar manda os candidatos (já
-filtrados pelo dedup) pra WEBHOOK_URL (.env), por exemplo um Webhook Trigger
-do n8n — em LOTES (WEBHOOK_BATCH_SIZE, padrão 20; ou por pedido, campo
+Webhook: toda coleta concluída via POST /coletar ou POST /vagas/coletar manda
+os candidatos (já filtrados pelo dedup) pra WEBHOOK_URL (.env), por exemplo
+um Webhook Trigger do n8n — em LOTES (WEBHOOK_BATCH_SIZE, padrão 20; ou por pedido, campo
 webhook_lote), pra não mandar um JSON gigante de uma coleta grande numa
 chamada só. O resultado do envio (quantos lotes, erros por lote) fica em
 job.webhook (GET /job/{job_id}). Sem WEBHOOK_URL configurada, a coleta
@@ -112,6 +114,7 @@ def _enviar_webhook(job_id: str, resultado: dict, tamanho_lote: int) -> dict:
             "job_id": job_id,
             "enviado_em": agora(),
             "palavras": resultado.get("palavras"),
+            "vaga_titulo": resultado.get("vaga_titulo"),
             "lote": i,
             "lotes_total": len(lotes),
             "candidatos_no_lote": len(lote),
@@ -226,6 +229,32 @@ class ColetaPedido(BaseModel):
         None, description="Código(s) de cargo do Pandapé (IdsJob)")
 
 
+class ColetaVagaPedido(BaseModel):
+    """Coleta quem se candidatou a um processo seletivo (vaga) já publicado —
+    diferente de ColetaPedido, que busca na base geral de currículos."""
+
+    palavra_chave_vaga: str | None = Field(
+        None, description="Título/referência do processo (ex: 'Auxiliar de Limpeza')")
+    id_vacancy: str | None = Field(
+        None, description="ID do processo, se já souber (pula a busca por palavra-chave)")
+    id_vacancy_folder: str | None = Field(
+        None, description="ID da pasta/estágio (ex: Inscritos) — exigido junto com id_vacancy")
+    paginas: int = Field(1, ge=1, le=200, description="Quantas páginas de inscritos coletar")
+    todas: bool = Field(False, description="Ignora 'paginas' e coleta até acabar / max_candidatos")
+    por_pagina: int = Field(10, ge=1, le=100)
+    max_candidatos: int = Field(1000, ge=1, le=10000, description="Teto para 'todas'")
+    com_detalhes: bool = Field(True, description="Abrir o currículo de cada inscrito")
+    limite_detalhes: int | None = Field(
+        None, description="Quantos currículos abrir (null = todos os coletados)")
+    somente_com_contato: bool = Field(
+        True, description="Retornar só quem tem telefone/e-mail no currículo")
+    excluir_usados: bool = Field(
+        True, description="Não devolver candidatos já marcados como usados com sucesso antes")
+    webhook_lote: int = Field(
+        WEBHOOK_BATCH_SIZE_PADRAO, ge=1, le=500,
+        description="Quantos candidatos por chamada de webhook")
+
+
 def _atualizar(job_id: str, **campos):
     with _lock:
         if job_id in _jobs:
@@ -269,6 +298,50 @@ def _rodar_coleta(job_id: str, pedido: ColetaPedido):
             pass
     except ValueError as exc:  # filtro com nome inválido
         _atualizar(job_id, status="erro", erro=str(exc), tipo_erro="filtro_invalido")
+    except core.SessaoExpirada as exc:
+        _atualizar(job_id, status="erro", erro=str(exc), tipo_erro="sessao_expirada")
+    except Exception as exc:  # noqa: BLE001 — queremos registrar qualquer falha no job
+        _atualizar(job_id, status="erro", erro=str(exc),
+                   tipo_erro="falha", traceback=traceback.format_exc())
+
+
+def _rodar_coleta_vaga(job_id: str, pedido: ColetaVagaPedido):
+    _atualizar(job_id, status="rodando")
+
+    def progresso(info):
+        _atualizar(job_id, progresso=info)
+
+    try:
+        resultado = core.executar_coleta_vaga(
+            palavra_chave_vaga=pedido.palavra_chave_vaga,
+            id_vacancy=pedido.id_vacancy,
+            id_vacancy_folder=pedido.id_vacancy_folder,
+            paginas=pedido.paginas,
+            por_pagina=pedido.por_pagina,
+            todas=pedido.todas,
+            max_candidatos=pedido.max_candidatos,
+            com_detalhes=pedido.com_detalhes,
+            limite_detalhes=pedido.limite_detalhes,
+            somente_com_contato=pedido.somente_com_contato,
+            storage_state=STORAGE_STATE,
+            cdp=CDP,
+            headless=HEADLESS,
+            progresso=progresso,
+        )
+        if resultado.get("erro"):
+            _atualizar(job_id, status="erro", erro=resultado["erro"], tipo_erro="vaga_nao_encontrada")
+            return
+        resultado = _persistir_e_filtrar(resultado, pedido.excluir_usados)
+        webhook = _enviar_webhook(job_id, resultado, pedido.webhook_lote)
+        _atualizar(job_id, status="concluido", resultado=resultado, webhook=webhook)
+        try:  # persiste em disco para inspeção/histórico
+            RESULTADOS_DIR.mkdir(parents=True, exist_ok=True)
+            (RESULTADOS_DIR / f"job-{job_id}.json").write_text(
+                json.dumps(resultado, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+    except ValueError as exc:  # nem palavra-chave nem id_vacancy+folder informados
+        _atualizar(job_id, status="erro", erro=str(exc), tipo_erro="pedido_invalido")
     except core.SessaoExpirada as exc:
         _atualizar(job_id, status="erro", erro=str(exc), tipo_erro="sessao_expirada")
     except Exception as exc:  # noqa: BLE001 — queremos registrar qualquer falha no job
@@ -349,6 +422,43 @@ def coletar(pedido: ColetaPedido):
                          "criado": agora(), "atualizado": agora(), "progresso": None,
                          "resultado": None, "erro": None}
     _executor.submit(_rodar_coleta, job_id, pedido)
+    return {"job_id": job_id, "status": "na_fila",
+            "consulte": f"/job/{job_id}"}
+
+
+@app.get("/vagas/buscar", dependencies=[Depends(exigir_chave)])
+def buscar_vagas_rapido(palavra_chave: str, por_pagina: int = 10):
+    """Procura processos seletivos (vagas) pelo título/referência — rápido,
+    síncrono, só pra achar o idVacancy/idVacancyFolder de um processo antes
+    de coletar os inscritos (POST /vagas/coletar)."""
+    if not STORAGE_STATE.exists() and not CDP:
+        raise HTTPException(503, "sem sessão salva; veja /health")
+    try:
+        with core.abrir_browser(storage_state=STORAGE_STATE, cdp=CDP, headless=HEADLESS) as context:
+            return core.buscar_vagas(context, palavra_chave, por_pagina=por_pagina)
+    except core.SessaoExpirada as exc:
+        raise HTTPException(401, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, str(exc))
+
+
+@app.post("/vagas/coletar", dependencies=[Depends(exigir_chave)])
+def coletar_vaga(pedido: ColetaVagaPedido):
+    """Coleta quem se candidatou a um processo seletivo (vaga) já publicado —
+    roda como job, igual POST /coletar. Informe palavra_chave_vaga (acha o
+    processo pelo título/referência) ou id_vacancy + id_vacancy_folder (se já
+    souber os dois, de uma chamada anterior a GET /vagas/buscar)."""
+    if not pedido.palavra_chave_vaga and not (pedido.id_vacancy and pedido.id_vacancy_folder):
+        raise HTTPException(
+            400, "informe palavra_chave_vaga, ou id_vacancy + id_vacancy_folder")
+    if not STORAGE_STATE.exists() and not CDP:
+        raise HTTPException(503, "sem sessão salva; veja /health para gerar")
+    job_id = uuid.uuid4().hex[:12]
+    with _lock:
+        _jobs[job_id] = {"job_id": job_id, "status": "na_fila", "pedido": pedido.model_dump(),
+                         "criado": agora(), "atualizado": agora(), "progresso": None,
+                         "resultado": None, "erro": None}
+    _executor.submit(_rodar_coleta_vaga, job_id, pedido)
     return {"job_id": job_id, "status": "na_fila",
             "consulte": f"/job/{job_id}"}
 

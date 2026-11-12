@@ -122,6 +122,46 @@
   <div id="resultado"></div>
 
   <fieldset>
+    <legend>Candidatos de um processo (vaga) já publicado</legend>
+    <p class="hint" style="margin-top:0">Diferente da busca acima: pega quem se candidatou a um processo seletivo
+      específico (aba "Processos" do Pandapé), não a base geral de currículos.</p>
+    <div class="row">
+      <div style="flex:3">
+        <label>Título ou referência do processo</label>
+        <input type="text" id="vagaPalavra" placeholder="ex: Auxiliar de Limpeza">
+      </div>
+      <div style="flex:1; display:flex; align-items:flex-end">
+        <button type="button" id="btnBuscarVagas" style="width:100%">Buscar processo</button>
+      </div>
+    </div>
+    <div id="vagasEncontradas"></div>
+
+    <div class="row" style="margin-top:12px">
+      <div>
+        <label>Páginas de inscritos</label>
+        <input type="number" id="vagaPaginas" value="1" min="1" max="200">
+      </div>
+      <div>
+        <label>Por página</label>
+        <input type="number" id="vagaPorPagina" value="10" min="1" max="100">
+      </div>
+      <div>
+        <label>Limitar quantos currículos abrir</label>
+        <input type="number" id="vagaLimiteDetalhes" min="1" placeholder="ex: 20">
+      </div>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="vagaTodas"> Ignorar "páginas" e coletar todos os inscritos</label>
+      <label><input type="checkbox" id="vagaComDetalhes" checked> Abrir currículo de cada inscrito</label>
+      <label><input type="checkbox" id="vagaSomenteComContato" checked> Só com telefone/e-mail</label>
+      <label><input type="checkbox" id="vagaExcluirUsados" checked> Não repetir quem já foi usado</label>
+    </div>
+    <button type="button" id="btnColetarVaga" style="margin-top:10px" disabled>Coletar inscritos</button>
+    <div id="statusVaga" style="margin-top:10px; font-size:0.9rem; white-space:pre-wrap"></div>
+    <div id="resultadoVaga"></div>
+  </fieldset>
+
+  <fieldset>
     <legend>Buscar no banco já salvo (sem consultar o Pandapé)</legend>
     <div class="row">
       <div style="flex:3">
@@ -175,7 +215,7 @@ function setStatus(texto, erro) {
   el.className = erro ? 'erro' : '';
 }
 
-function mostrarResultado(resultado) {
+function mostrarResultado(resultado, alvoId = 'resultado') {
   const candidatos = resultado.candidatos || [];
   const linhas = candidatos.map(c => {
     const ct = c.contato || {};
@@ -191,8 +231,9 @@ function mostrarResultado(resultado) {
       </td>
     </tr>`;
   }).join('');
-  $('resultado').innerHTML = `
-    <p><strong>${resultado.coletados ?? candidatos.length}</strong> coletados
+  $(alvoId).innerHTML = `
+    <p>${resultado.vaga_titulo ? `Processo: <strong>${resultado.vaga_titulo}</strong> — ` : ''}
+       <strong>${resultado.coletados ?? candidatos.length}</strong> coletados
        ${resultado.excluidos_ja_usados ? `, ${resultado.excluidos_ja_usados} já usados (fora)` : ''}
        — total no site: ${resultado.total_no_site ?? '?'}
        ${resultado.dedup_ativo === false ? ' <span class="pill no">dedup desligado</span>' : ''}
@@ -310,8 +351,100 @@ async function buscarContatoSalvo() {
   }
 }
 
+let vagaEscolhida = null;
+
+function setStatusVaga(texto, erro) {
+  const el = $('statusVaga');
+  el.textContent = texto;
+  el.style.color = erro ? '#dc2626' : '';
+}
+
+async function buscarProcessos() {
+  const apiKey = apiKeyInput.value;
+  const palavra = $('vagaPalavra').value.trim();
+  const alvo = $('vagasEncontradas');
+  vagaEscolhida = null;
+  $('btnColetarVaga').disabled = true;
+  if (!apiKey) return setStatusVaga('Preencha a chave de API.', true);
+  if (!palavra) { alvo.innerHTML = ''; return; }
+  alvo.innerHTML = '<p>Buscando processos...</p>';
+  try {
+    const res = await fetch('/vagas/buscar?' + new URLSearchParams({ palavra_chave: palavra }),
+      { headers: { 'X-API-Key': apiKey } });
+    const data = await res.json();
+    if (!res.ok) { alvo.innerHTML = `<p class="erro">Erro: ${data.detail || JSON.stringify(data)}</p>`; return; }
+    const vagas = data.vagas || [];
+    if (!vagas.length) { alvo.innerHTML = '<p>Nenhum processo encontrado com essa palavra.</p>'; return; }
+    alvo.innerHTML = vagas.map((v, i) => `
+      <label style="display:flex; align-items:center; gap:8px; margin-top:8px; font-size:0.9rem">
+        <input type="radio" name="vagaEscolha" value="${i}" ${i === 0 ? 'checked' : ''}>
+        ${v.titulo} <span class="pill ${i === 0 ? 'ok' : 'no'}" style="margin-left:auto">idVacancy ${v.idVacancy}</span>
+      </label>`).join('');
+    vagaEscolhida = vagas[0];
+    $('btnColetarVaga').disabled = false;
+    alvo.querySelectorAll('input[name=vagaEscolha]').forEach(radio => {
+      radio.addEventListener('change', () => { vagaEscolhida = vagas[Number(radio.value)]; });
+    });
+  } catch (e) {
+    alvo.innerHTML = `<p class="erro">Falha de conexão: ${e.message}</p>`;
+  }
+}
+
+async function coletarVaga() {
+  const apiKey = apiKeyInput.value;
+  if (!apiKey) return setStatusVaga('Preencha a chave de API.', true);
+  if (!vagaEscolhida) return setStatusVaga('Busque e escolha um processo antes.', true);
+  const pedido = {
+    id_vacancy: vagaEscolhida.idVacancy,
+    id_vacancy_folder: vagaEscolhida.idVacancyFolder,
+    paginas: Number($('vagaPaginas').value) || 1,
+    por_pagina: Number($('vagaPorPagina').value) || 10,
+    todas: $('vagaTodas').checked,
+    com_detalhes: $('vagaComDetalhes').checked,
+    somente_com_contato: $('vagaSomenteComContato').checked,
+    excluir_usados: $('vagaExcluirUsados').checked,
+    limite_detalhes: $('vagaLimiteDetalhes').value ? Number($('vagaLimiteDetalhes').value) : null,
+  };
+  setStatusVaga('Disparando coleta...');
+  $('resultadoVaga').innerHTML = '';
+  let jobId;
+  try {
+    const res = await fetch('/vagas/coletar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+      body: JSON.stringify(pedido),
+    });
+    const data = await res.json();
+    if (!res.ok) return setStatusVaga('Erro: ' + (data.detail || JSON.stringify(data)), true);
+    jobId = data.job_id;
+  } catch (e) {
+    return setStatusVaga('Falha de conexão: ' + e.message, true);
+  }
+
+  while (true) {
+    await new Promise(r => setTimeout(r, 3000));
+    const res = await fetch(`/job/${jobId}`, { headers: { 'X-API-Key': apiKey } });
+    const job = await res.json();
+    if (job.status === 'rodando' || job.status === 'na_fila') {
+      const prog = job.progresso ? ` — ${job.progresso.fase}: ${job.progresso.processados ?? job.progresso.coletados}/${job.progresso.total ?? ''}` : '';
+      setStatusVaga(`job ${jobId}: ${job.status}${prog}`);
+      continue;
+    }
+    if (job.status === 'erro') {
+      setStatusVaga(`job ${jobId}: erro — ${job.erro}`, true);
+      return;
+    }
+    setStatusVaga(`job ${jobId}: concluído` + (job.webhook ? ` — webhook: ${formatarWebhook(job.webhook)}` : ''));
+    mostrarResultado(job.resultado, 'resultadoVaga');
+    return;
+  }
+}
+
 $('form').addEventListener('submit', (e) => { e.preventDefault(); coletar(); });
 $('btnBuscar').addEventListener('click', buscarRapido);
+$('btnBuscarVagas').addEventListener('click', buscarProcessos);
+$('vagaPalavra').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); buscarProcessos(); } });
+$('btnColetarVaga').addEventListener('click', coletarVaga);
 $('btnBuscaContato').addEventListener('click', buscarContatoSalvo);
 $('buscaContato').addEventListener('keydown', (e) => { if (e.key === 'Enter') buscarContatoSalvo(); });
 </script>

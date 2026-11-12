@@ -88,11 +88,38 @@ Como uma coleta grande leva minutos, ela roda como **job**: dispara e consulta.
 | GET | `/health` | estado da API, sessão salva e banco de dedup |
 | GET | `/buscar?palavra=assistente&paginas=1` | busca rápida e síncrona (só a lista) |
 | POST | `/coletar` | inicia a coleta (busca + detalhes) → `{job_id}` |
+| GET | `/vagas/buscar?palavra_chave=Auxiliar` | acha um processo seletivo já publicado, pelo título/referência |
+| POST | `/vagas/coletar` | coleta quem se candidatou a um processo → `{job_id}` (mesmo padrão de `/coletar`) |
 | GET | `/job/{job_id}` | status e resultado do job |
 | GET | `/jobs` | lista os jobs desta execução |
 | POST | `/candidatos/marcar-usado` | marca candidato(s) como usados — não voltam mais numa busca |
 | POST | `/candidatos/desmarcar` | reverte a marca de usado |
 | GET | `/candidatos?usado=false` | lista candidatos já salvos no banco local |
+
+### Candidatos de um processo (vaga) já publicado
+
+Diferente de `/coletar` (busca na base geral de currículos), `/vagas/coletar`
+pega quem se candidatou a um processo seletivo específico que a empresa já
+publicou — a mesma lista que aparece na aba "Processos" do Pandapé ao abrir
+um processo. O currículo sai com a mesma estrutura de sempre (telefone,
+e-mail, experiências, formação...).
+
+```bash
+# 1. acha o processo pelo título/referência (síncrono, rápido)
+curl "http://localhost:8090/vagas/buscar?palavra_chave=Auxiliar+de+Limpeza" \
+  -H "X-API-Key: SUA_CHAVE"
+# -> {"vagas": [{"idVacancy": "3924327", "idVacancyFolder": "25325341", "titulo": "..."}]}
+
+# 2. coleta os inscritos (passando a palavra-chave direto, ou id_vacancy +
+#    id_vacancy_folder se já souber os dois)
+curl -X POST http://localhost:8090/vagas/coletar \
+  -H "X-API-Key: SUA_CHAVE" -H 'Content-Type: application/json' \
+  -d '{"palavra_chave_vaga": "Auxiliar de Limpeza", "todas": true, "com_detalhes": true}'
+# -> {"job_id":"ab12cd34ef56", ...}  (consulte em GET /job/{job_id}, igual /coletar)
+```
+
+Dedup e webhook funcionam exatamente como em `/coletar` — mesmo banco,
+mesmos lotes.
 
 ### Dedup — não repetir o mesmo candidato
 

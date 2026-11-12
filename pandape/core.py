@@ -11,6 +11,13 @@ Fluxo de alto nível:
 Ou tudo de uma vez, gerenciando o browser sozinho:
     resultado = executar_coleta(["assistente"], paginas=3, com_detalhes=True,
                                 limite_detalhes=5)
+
+Além da busca geral na base de currículos, também dá pra coletar quem se
+candidatou a um processo seletivo (vaga) já publicado pela empresa:
+    resultado = executar_coleta_vaga(palavra_chave_vaga="Vigilante", com_detalhes=True)
+Usa os mesmos endpoints que a tela "Processos" do Pandapé usa por trás (achar
+a vaga pelo título/referência, listar inscritos, abrir cada currículo) — o
+currículo sai com a mesma estrutura de sempre (reaproveita EXTRAIR_DETALHE_JS).
 """
 
 from __future__ import annotations
@@ -29,6 +36,12 @@ STORAGE_STATE = PROJECT_ROOT / "data" / "pandape_storage_state.json"
 
 BASE = "https://pandape.infojobs.com.br/Company/Candidate/IndexInfojobs"
 DETALHE_BASE = "https://pandape.infojobs.com.br/Company/Candidate/DetailInfojobs/"
+
+# Candidatos inscritos num processo (vaga) já publicado — endpoints por trás
+# da aba "Processos" > abrir um processo > lista de inscritos.
+VACANCY_INDEX_URL = "https://pandape.infojobs.com.br/Company/Vacancy/Index"
+MATCH_LIST_URL = "https://pandape.infojobs.com.br/Company/Match/ListMatches"
+MATCH_DETAIL_BASE = "https://pandape.infojobs.com.br/Company/Match/Detail?id="
 
 # Filtros que a URL manda como "None" quando não estão em uso.
 FILTROS_NEUTROS = {
@@ -150,6 +163,21 @@ def montar_url(palavras, pagina, por_pagina, match="AllWords",
     for chave, valor in (extras or {}).items():
         partes.append(f"{chave}={quote(str(valor))}")
     return f"{BASE}?" + "&".join(partes)
+
+
+def montar_url_vagas(palavra_chave, pagina=1, por_pagina=10, ordem="1"):
+    """Monta a URL da aba Processos filtrada por palavra-chave (título/referência)."""
+    partes = []
+    if palavra_chave:
+        partes.append(f"Keywords[0]={quote(palavra_chave)}")
+    partes += [
+        f"Pagination[0]={pagina}",
+        f"Pagination[1]={por_pagina}",
+        f"Order={ordem}",
+        "IdsFilter=0",
+        "Geo=false",
+    ]
+    return f"{VACANCY_INDEX_URL}?" + "&".join(partes)
 
 
 # ------------------------------------------------------------------ JS de extração
@@ -296,6 +324,27 @@ EXTRAIR_DETALHE_JS = r"""
 }
 """
 
+EXTRAIR_VAGAS_JS = r"""
+() => {
+  const limpar = t => (t || '').replace(/\s+/g, ' ').trim();
+  const linhas = [...document.querySelectorAll('.js_rowvacancy')];
+  const vagas = linhas.map(row => {
+    const link = row.querySelector('a[href*="/Company/Match/Matches/"]');
+    const href = link ? link.getAttribute('href') : null;
+    const m = href ? href.match(/Matches\/(\d+)\?idvacancyfolder=(\d+)/i) : null;
+    const checkbox = row.querySelector('input[data-idvacancy]');
+    return {
+      idVacancy: m ? m[1] : (checkbox ? checkbox.getAttribute('data-idvacancy') : null),
+      idVacancyFolder: m ? m[2] : null,
+      titulo: link ? limpar(link.innerText) : null,
+    };
+  }).filter(v => v.idVacancy && v.idVacancyFolder);
+
+  const elTotal = document.querySelector('#textFiltered, #MatchSearchTotal');
+  return { total_texto: elTotal ? limpar(elTotal.innerText) : null, vagas };
+}
+"""
+
 
 # ------------------------------------------------------------------ helpers de página
 
@@ -387,6 +436,109 @@ def _caiu_no_login(page) -> bool:
 
 
 # ------------------------------------------------------------------ coleta de alto nível
+
+def buscar_vagas(context, palavra_chave, pagina=1, por_pagina=10):
+    """Procura processos seletivos (vagas) pelo título/referência — a mesma
+    busca da aba "Processos" do site. Devolve {total_texto, vagas:[...]},
+    cada vaga com idVacancy/idVacancyFolder (precisa dos dois pra listar os
+    inscritos com `coletar_candidaturas`)."""
+    page = context.new_page()
+    try:
+        url = montar_url_vagas(palavra_chave, pagina, por_pagina)
+        page.goto(url, wait_until="domcontentloaded")
+        try:
+            page.wait_for_load_state("networkidle", timeout=20000)
+        except PlaywrightTimeout:
+            pass
+        if _caiu_no_login(page):
+            raise SessaoExpirada("sessão do Pandapé expirou (redirecionou para login)")
+        page.wait_for_timeout(600)
+        return page.evaluate(EXTRAIR_VAGAS_JS)
+    finally:
+        page.close()
+
+
+def _extrair_matches_do_fragmento(html_fragmento):
+    """Extrai {idCandidato, nome, idCandidateResume, link_curriculo} de cada
+    card de candidato num fragmento HTML devolvido por MATCH_LIST_URL — as
+    mesmas chaves que `coletar_detalhes`/`_estruturar` já esperam, pra
+    reaproveitar os dois sem mudar nada neles."""
+    candidatos = []
+    for tag in re.finditer(r'<a\b[^>]*class="match-link[^"]*"[^>]*>', html_fragmento):
+        trecho = tag.group(0)
+
+        def attr(nome, _trecho=trecho):
+            m = re.search(rf'{nome}="([^"]*)"', _trecho)
+            return m.group(1) if m else None
+
+        id_match = attr("data-idmatch")
+        if not id_match:
+            continue
+        candidatos.append({
+            "idCandidato": id_match,
+            "nome": attr("data-username"),
+            "idCandidateResume": attr("data-idcandidateresume"),
+            "link_curriculo": MATCH_DETAIL_BASE + id_match,
+        })
+    return candidatos
+
+
+def coletar_candidaturas(context, id_vacancy, id_vacancy_folder, paginas=1, por_pagina=10,
+                         todas=False, max_candidatos=1000, progresso=None):
+    """Lista quem se candidatou a uma vaga (dado idVacancy + idVacancyFolder,
+    de `buscar_vagas`) — direto via o mesmo endpoint que o site usa pra
+    rolagem infinita, sem precisar abrir/rolar a tela. Devolve o mesmo
+    formato de `coletar_busca`: {total_texto, candidatos:[...]}.
+    """
+    vistos, todos, total_texto = set(), [], None
+    pagina = 0
+    while True:
+        pagina += 1
+        resp = context.request.post(
+            MATCH_LIST_URL,
+            form={
+                "matchesFilter.PageNumber": str(pagina),
+                "matchesFilter.PageSize": str(por_pagina),
+                "matchesFilter.Order": "0",
+                "matchesFilter.IsLast": "False",
+                "matchesFilter.IdVacancy": str(id_vacancy),
+                "matchesFilter.IdVacancyFolder": str(id_vacancy_folder),
+            },
+        )
+        if not resp.ok:
+            raise SessaoExpirada(
+                f"Pandapé recusou a listagem de candidatos (status {resp.status})")
+        try:
+            dados = resp.json()
+        except Exception as exc:  # noqa: BLE001 — resposta não-JSON = sessão caiu
+            raise SessaoExpirada("sessão do Pandapé expirou (ListMatches sem JSON)") from exc
+
+        total_texto = dados.get("total", total_texto)
+        candidatos_pagina = _extrair_matches_do_fragmento(dados.get("viewList", ""))
+        if not candidatos_pagina:
+            break
+
+        novos = 0
+        for cand in candidatos_pagina:
+            if cand["idCandidato"] in vistos:
+                continue
+            vistos.add(cand["idCandidato"])
+            cand["pagina"] = pagina
+            todos.append(cand)
+            novos += 1
+
+        if progresso:
+            progresso({"fase": "candidaturas", "pagina": pagina,
+                       "coletados": len(todos), "total_texto": total_texto})
+
+        if not todas and pagina >= paginas:
+            break
+        if len(todos) >= max_candidatos:
+            break
+        if novos == 0 or len(candidatos_pagina) < por_pagina:
+            break  # última página
+    return {"total_texto": total_texto, "candidatos": todos}
+
 
 def coletar_busca(context, palavras, paginas=1, por_pagina=100, todas=False,
                   max_candidatos=1000, match="AllWords", escopo="AllFields",
@@ -635,6 +787,73 @@ def executar_coleta(palavras, paginas=1, por_pagina=100, todas=False, max_candid
         return {
             "palavras": palavras,
             "total_no_site": busca["total_texto"],
+            "coletados": coletados,
+            "com_contato": sum(1 for c in estruturados
+                               if c["contato"]["telefone"] or c["contato"]["email"]
+                               or c["contato"]["whatsapp"]),
+            "retornados": len(estruturados),
+            "filtrado_por_contato": somente_com_contato,
+            "candidatos": estruturados,
+        }
+
+
+def executar_coleta_vaga(palavra_chave_vaga=None, id_vacancy=None, id_vacancy_folder=None,
+                         paginas=1, por_pagina=10, todas=False, max_candidatos=1000,
+                         com_detalhes=False, limite_detalhes=None, somente_com_contato=False,
+                         storage_state=STORAGE_STATE, cdp=None, headless=True, progresso=None):
+    """Coleta quem se candidatou a um processo seletivo (vaga) já publicado.
+
+    Informe id_vacancy + id_vacancy_folder diretamente se já souber (ex: veio
+    de uma chamada anterior a `buscar_vagas`), ou só palavra_chave_vaga pra
+    deixar escolher o primeiro processo que bater a busca por título/referência.
+
+    Ao contrário da busca geral, a listagem de inscritos não traz telefone/
+    e-mail — só dá pra saber quem tem contato depois de abrir o currículo
+    (com_detalhes=True), então `somente_com_contato` aqui só filtra o
+    resultado final, não evita abrir detalhe de quem não tem contato.
+    """
+    with abrir_browser(storage_state=storage_state, cdp=cdp, headless=headless) as context:
+        vaga_usada = None
+        if id_vacancy is None or id_vacancy_folder is None:
+            if not palavra_chave_vaga:
+                raise ValueError(
+                    "informe id_vacancy + id_vacancy_folder, ou palavra_chave_vaga pra buscar")
+            achadas = buscar_vagas(context, palavra_chave_vaga, por_pagina=10)
+            if not achadas["vagas"]:
+                return {
+                    "erro": f"nenhum processo encontrado pra '{palavra_chave_vaga}'",
+                    "vagas_encontradas": [],
+                }
+            vaga_usada = achadas["vagas"][0]
+            id_vacancy = vaga_usada["idVacancy"]
+            id_vacancy_folder = vaga_usada["idVacancyFolder"]
+
+        lista = coletar_candidaturas(
+            context, id_vacancy, id_vacancy_folder, paginas=paginas, por_pagina=por_pagina,
+            todas=todas, max_candidatos=max_candidatos, progresso=progresso)
+        candidatos = lista["candidatos"]
+
+        if com_detalhes:
+            detalhes = coletar_detalhes(context, candidatos, limite=limite_detalhes,
+                                        progresso=progresso)
+            por_id = {d.get("idCandidato"): d for d in detalhes}
+            for cand in candidatos:
+                det = por_id.get(cand["idCandidato"])
+                if det:
+                    cand["detalhe"] = det
+
+        estruturados = [_estruturar(c) for c in candidatos]
+        coletados = len(estruturados)
+        if somente_com_contato:
+            estruturados = [c for c in estruturados
+                            if c["contato"]["telefone"] or c["contato"]["email"]
+                            or c["contato"]["whatsapp"]]
+
+        return {
+            "id_vacancy": id_vacancy,
+            "id_vacancy_folder": id_vacancy_folder,
+            "vaga_titulo": vaga_usada["titulo"] if vaga_usada else None,
+            "total_no_site": lista["total_texto"],
             "coletados": coletados,
             "com_contato": sum(1 for c in estruturados
                                if c["contato"]["telefone"] or c["contato"]["email"]
