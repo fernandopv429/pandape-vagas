@@ -10,6 +10,13 @@ Xvfb "$DISPLAY" -screen 0 1440x900x24 &
 sleep 1
 
 echo "[entrypoint] subindo Chrome persistente (perfil em $CHROME_PROFILE_DIR, CDP só em localhost:9222)..."
+# Só roda uma instância de Chrome por vez nesse perfil — qualquer lock que
+# sobrou é de um container anterior que morreu sem fechar o Chrome direito
+# (ex: redeploy no Coolify substituindo o container). Como o hostname muda a
+# cada container, o Chrome vê esse lock e recusa subir achando que é outra
+# máquina usando o perfil — por isso apaga antes de tentar.
+rm -f "$CHROME_PROFILE_DIR/SingletonLock" "$CHROME_PROFILE_DIR/SingletonCookie" "$CHROME_PROFILE_DIR/SingletonSocket"
+
 # --no-sandbox: o container roda como root, e o Chrome recusa iniciar como
 # root sem essa flag (sandbox do Chrome exige um usuário não-root).
 google-chrome-stable \
