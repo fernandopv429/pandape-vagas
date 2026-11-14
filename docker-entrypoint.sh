@@ -6,6 +6,10 @@ CHROME_PROFILE_DIR="${CHROME_PROFILE_DIR:-/data/chrome-profile}"
 mkdir -p "$CHROME_PROFILE_DIR"
 
 echo "[entrypoint] subindo Xvfb em $DISPLAY..."
+# Mesmo motivo do lock do Chrome logo abaixo: se o processo anterior morreu
+# sem liberar o display (ex: `docker restart`, que reaproveita o /tmp em vez
+# de dar um container limpo), sobra esse lock e o Xvfb novo recusa subir.
+rm -f "/tmp/.X${DISPLAY#:}-lock"
 Xvfb "$DISPLAY" -screen 0 1440x900x24 &
 sleep 1
 

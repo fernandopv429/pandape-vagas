@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from contextlib import contextmanager
 from typing import Iterable
 
@@ -131,13 +132,26 @@ def buscar_por_contato(valor: str, limite: int = 50) -> list[dict]:
     `valor` (parcial, ignora maiúsculas/formatação) — sem consultar o Pandapé.
     Só dá match em quem já foi coletado com `com_detalhes`/listagem incluindo
     contato (o dado inteiro do candidato é pesquisado como texto).
+
+    Telefone funciona com ou sem traço/espaço/parênteses dos dois lados —
+    "61-992046495" acha quem tá salvo como "61992046495" e vice-versa.
     """
     valor = valor.strip()
     if not valor:
         return []
+    apenas_digitos = re.sub(r"\D", "", valor)
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM candidatos WHERE dados::text ILIKE %s ORDER BY ultima_vista_em DESC LIMIT %s",
-            (f"%{valor}%", limite),
-        ).fetchall()
+        if len(apenas_digitos) >= 6:
+            rows = conn.execute(
+                "SELECT * FROM candidatos "
+                "WHERE regexp_replace(dados::text, '[^0-9]', '', 'g') ILIKE %s "
+                "   OR dados::text ILIKE %s "
+                "ORDER BY ultima_vista_em DESC LIMIT %s",
+                (f"%{apenas_digitos}%", f"%{valor}%", limite),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM candidatos WHERE dados::text ILIKE %s ORDER BY ultima_vista_em DESC LIMIT %s",
+                (f"%{valor}%", limite),
+            ).fetchall()
     return rows
