@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 from contextlib import contextmanager
+from html import unescape
 from pathlib import Path
 from urllib.parse import quote
 
@@ -462,14 +463,20 @@ def _extrair_matches_do_fragmento(html_fragmento):
     """Extrai {idCandidato, nome, idCandidateResume, link_curriculo} de cada
     card de candidato num fragmento HTML devolvido por MATCH_LIST_URL — as
     mesmas chaves que `coletar_detalhes`/`_estruturar` já esperam, pra
-    reaproveitar os dois sem mudar nada neles."""
+    reaproveitar os dois sem mudar nada neles.
+
+    Aqui a leitura é por regex em cima do HTML cru, não por innerText no
+    navegador — então as entidades HTML chegam escapadas e precisam ser
+    desfeitas na mão: sem isso, "Márcio" vira "M&#xE1;rcio" e segue assim
+    pra todo lado (webhook, banco, parâmetro de template de WhatsApp).
+    """
     candidatos = []
     for tag in re.finditer(r'<a\b[^>]*class="match-link[^"]*"[^>]*>', html_fragmento):
         trecho = tag.group(0)
 
         def attr(nome, _trecho=trecho):
             m = re.search(rf'{nome}="([^"]*)"', _trecho)
-            return m.group(1) if m else None
+            return unescape(m.group(1)) if m else None
 
         id_match = attr("data-idmatch")
         if not id_match:
