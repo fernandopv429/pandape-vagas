@@ -95,6 +95,8 @@ Como uma coleta grande leva minutos, ela roda como **job**: dispara e consulta.
 | POST | `/candidatos/marcar-usado` | marca candidato(s) como usados — não voltam mais numa busca |
 | POST | `/candidatos/desmarcar` | reverte a marca de usado |
 | GET | `/candidatos?usado=false` | lista candidatos já salvos no banco local |
+| GET | `/candidatos/buscar?contato=...` | acha um candidato salvo por telefone/e-mail (telefone casa com ou sem +55) |
+| GET | `/candidatos/{id}/curriculo` | abre o currículo direto no Pandapé, na hora (não lê do banco) |
 
 ### Candidatos de um processo (vaga) já publicado
 
@@ -120,6 +122,29 @@ curl -X POST http://localhost:8090/vagas/coletar \
 
 Dedup e webhook funcionam exatamente como em `/coletar` — mesmo banco,
 mesmos lotes.
+
+### Pegar o currículo direto do Pandapé
+
+`/candidatos/buscar` lê o que já está salvo. Quando o candidato foi coletado
+sem `com_detalhes`, ou o currículo mudou depois, dá pra buscar no site na hora:
+
+```bash
+curl "http://localhost:8090/candidatos/870623414/curriculo" -H "X-API-Key: SUA_CHAVE"
+```
+
+O `id` é o mesmo que vem em toda coleta (campo `id`, e o número no fim de
+`link_curriculo`). O resultado já volta salvo no banco.
+
+Também dá pra completar na própria busca, para quem está sem currículo:
+
+```bash
+curl "http://localhost:8090/candidatos/buscar?contato=%2B5561992542775&completar_curriculo=true" \
+  -H "X-API-Key: SUA_CHAVE"
+```
+
+**Não existe busca de currículo por telefone no Pandapé** — a página de
+detalhe só abre por id. Para achar alguém pelo telefone sem ter o id, o
+caminho é o banco (`/candidatos/buscar`), que guarda o que já foi coletado.
 
 ### Dedup — não repetir o mesmo candidato
 

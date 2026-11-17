@@ -127,31 +127,60 @@ def listar(usado: bool | None = None, limite: int = 100, offset: int = 0) -> lis
     return rows
 
 
-def buscar_por_contato(valor: str, limite: int = 50) -> list[dict]:
-    """Procura candidatos já salvos cujo telefone, e-mail ou WhatsApp bate com
-    `valor` (parcial, ignora maiúsculas/formatação) — sem consultar o Pandapé.
-    Só dá match em quem já foi coletado com `com_detalhes`/listagem incluindo
-    contato (o dado inteiro do candidato é pesquisado como texto).
+def variantes_telefone(valor: str) -> list[str]:
+    """Formas equivalentes de um telefone brasileiro, só dígitos.
 
-    Telefone funciona com ou sem traço/espaço/parênteses dos dois lados —
-    "61-992046495" acha quem tá salvo como "61992046495" e vice-versa.
+    O Pandapé entrega sem DDI ("61-991086963"), mas quem consulta costuma ter
+    o número do WhatsApp, que vem com DDI ("+5561991086963"). Sem casar os
+    dois, a busca devolve vazio para um contato que existe — e quem chama
+    acaba tratando como "candidato não encontrado".
     """
-    valor = valor.strip()
+    d = re.sub(r"\D", "", valor or "")
+    if len(d) < 8:
+        return []
+    variantes = {d}
+    if d.startswith("55") and len(d) >= 12:
+        variantes.add(d[2:])          # tira o DDI
+    if len(d) in (10, 11):
+        variantes.add(f"55{d}")       # acrescenta o DDI
+    return sorted(variantes)
+
+
+def buscar_por_contato(valor: str, limite: int = 50) -> list[dict]:
+    """Procura candidatos já salvos pelo telefone, WhatsApp ou e-mail — sem
+    consultar o Pandapé.
+
+    Telefone é comparado campo a campo, só dígitos, e aceita com ou sem DDI
+    (+55) e com ou sem pontuação dos dois lados. Comparar contra o JSON
+    inteiro achatado seria mais simples, mas gera falso positivo: a sequência
+    procurada pode aparecer no meio de datas, salários ou outros IDs.
+
+    Qualquer outro texto (e-mail, pedaço de nome) continua caindo na busca
+    textual sobre o registro.
+    """
+    valor = (valor or "").strip()
     if not valor:
         return []
-    apenas_digitos = re.sub(r"\D", "", valor)
+
+    variantes = variantes_telefone(valor)
     with _conn() as conn:
-        if len(apenas_digitos) >= 6:
+        if variantes:
             rows = conn.execute(
-                "SELECT * FROM candidatos "
-                "WHERE regexp_replace(dados::text, '[^0-9]', '', 'g') ILIKE %s "
-                "   OR dados::text ILIKE %s "
-                "ORDER BY ultima_vista_em DESC LIMIT %s",
-                (f"%{apenas_digitos}%", f"%{valor}%", limite),
+                "SELECT * FROM candidatos WHERE "
+                "  dados::text ILIKE %s"
+                "  OR regexp_replace(COALESCE(dados->'contato'->>'telefone', ''), '[^0-9]', '', 'g') = ANY(%s)"
+                "  OR regexp_replace(COALESCE(dados->'contato'->>'whatsapp', ''), '[^0-9]', '', 'g') = ANY(%s)"
+                "  OR EXISTS ("
+                "       SELECT 1 FROM jsonb_array_elements_text("
+                "              COALESCE(dados->'contato'->'telefones', '[]'::jsonb)) AS t"
+                "       WHERE regexp_replace(t, '[^0-9]', '', 'g') = ANY(%s))"
+                " ORDER BY ultima_vista_em DESC LIMIT %s",
+                (f"%{valor}%", variantes, variantes, variantes, limite),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM candidatos WHERE dados::text ILIKE %s ORDER BY ultima_vista_em DESC LIMIT %s",
+                "SELECT * FROM candidatos WHERE dados::text ILIKE %s "
+                "ORDER BY ultima_vista_em DESC LIMIT %s",
                 (f"%{valor}%", limite),
             ).fetchall()
     return rows

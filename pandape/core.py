@@ -869,3 +869,38 @@ def executar_coleta_vaga(palavra_chave_vaga=None, id_vacancy=None, id_vacancy_fo
             "filtrado_por_contato": somente_com_contato,
             "candidatos": estruturados,
         }
+
+
+def buscar_curriculo_ao_vivo(id_candidato, storage_state=STORAGE_STATE, cdp=None,
+                             headless=True):
+    """Abre o currículo de UM candidato direto no Pandapé, pelo id do match, e
+    devolve no mesmo formato de sempre (contato + currículo estruturado).
+
+    Serve pra quando o candidato não foi coletado com detalhe, ou quando o
+    currículo mudou depois da coleta — aqui o dado vem do site na hora, não
+    do banco.
+
+    Importante: o Pandapé não permite PROCURAR currículo por telefone/e-mail.
+    A página de detalhe só abre por id (`/Company/Match/Detail?id=...`), que
+    é o mesmo `link_curriculo` que já vai em toda coleta. Pra achar alguém
+    por telefone sem ter o id, use o banco (`db.buscar_por_contato`).
+    """
+    id_candidato = str(id_candidato).strip()
+    if not id_candidato.isdigit():
+        raise ValueError(f"id do candidato deve ser numérico: {id_candidato!r}")
+
+    with abrir_browser(storage_state=storage_state, cdp=cdp, headless=headless) as context:
+        cand = {
+            "idCandidato": id_candidato,
+            "link_curriculo": MATCH_DETAIL_BASE + id_candidato,
+        }
+        detalhes = coletar_detalhes(context, [cand])
+        if not detalhes:
+            return None
+        detalhe = detalhes[0]
+        if detalhe.get("erro"):
+            raise RuntimeError(f"falha ao abrir o currículo: {detalhe['erro']}")
+
+        cand["nome"] = detalhe.get("nome_detalhe")
+        cand["detalhe"] = detalhe
+        return _estruturar(cand)

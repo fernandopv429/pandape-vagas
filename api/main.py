@@ -549,13 +549,83 @@ def listar_candidatos(usado: bool | None = None, limite: int = 100, offset: int 
 
 
 @app.get("/candidatos/buscar", dependencies=[Depends(exigir_chave)])
-def buscar_candidato_por_contato(contato: str, limite: int = 50):
+def buscar_candidato_por_contato(contato: str, limite: int = 50,
+                                 completar_curriculo: bool = False):
     """Procura no banco já salvo (sem consultar o Pandapé) candidatos cujo
     telefone, e-mail ou WhatsApp bate com `contato` — útil pra checar se um
-    lead específico já foi coletado antes."""
+    lead específico já foi coletado antes.
+
+    Telefone casa com ou sem DDI (+55) e com ou sem pontuação.
+
+    completar_curriculo=true: pra quem foi salvo sem currículo (coleta sem
+    `com_detalhes`), abre o currículo no Pandapé na hora e completa o
+    registro. Deixa a resposta bem mais lenta — é uma visita ao site por
+    candidato — então só use quando precisar mesmo do currículo.
+    """
     if not DB_DISPONIVEL:
         raise HTTPException(503, "DATABASE_URL não configurada — sem banco de dedup.")
     try:
-        return db.buscar_por_contato(contato, limite=limite)
+        achados = db.buscar_por_contato(contato, limite=limite)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"falha ao consultar o banco: {exc}")
+
+    if not completar_curriculo:
+        return achados
+
+    for linha in achados:
+        dados = linha.get("dados") or {}
+        if dados.get("curriculo") or not dados.get("id"):
+            continue
+        try:
+            ao_vivo = core.buscar_curriculo_ao_vivo(
+                dados["id"], storage_state=STORAGE_STATE, cdp=CDP, headless=HEADLESS)
+        except Exception as exc:  # noqa: BLE001 — currículo é extra, não derruba a busca
+            linha["curriculo_erro"] = str(exc)
+            continue
+        if ao_vivo:
+            # Mantém o que já estava salvo e só acrescenta o que veio do site,
+            # pra não perder nada que a listagem trouxe e o detalhe não traz.
+            dados.update({k: v for k, v in ao_vivo.items() if v not in (None, [], {})})
+            linha["dados"] = dados
+            linha["curriculo_atualizado"] = True
+            try:
+                db.upsert_candidatos([dados])
+            except Exception:  # noqa: BLE001 — já devolvemos o dado, salvar é bônus
+                pass
+    return achados
+
+
+@app.get("/candidatos/{id_candidato}/curriculo", dependencies=[Depends(exigir_chave)])
+def curriculo_ao_vivo(id_candidato: str, salvar: bool = True):
+    """Abre o currículo do candidato direto no Pandapé e devolve estruturado.
+
+    Diferente de `/candidatos/buscar`, que lê o que já está salvo, aqui o dado
+    vem do site na hora — serve pra candidato coletado sem detalhe, ou pra
+    pegar o currículo atualizado.
+
+    `id_candidato` é o mesmo id que vem em toda coleta (campo `id`, e o número
+    no fim de `link_curriculo`). Não existe jeito de abrir currículo por
+    telefone: o Pandapé só expõe a página por id — pra achar alguém pelo
+    telefone, use `/candidatos/buscar`.
+    """
+    if not STORAGE_STATE.exists() and not CDP:
+        raise HTTPException(503, "sem sessão salva; veja /health")
+    try:
+        candidato = core.buscar_curriculo_ao_vivo(
+            id_candidato, storage_state=STORAGE_STATE, cdp=CDP, headless=HEADLESS)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except core.SessaoExpirada as exc:
+        raise HTTPException(401, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, str(exc))
+
+    if candidato is None:
+        raise HTTPException(404, f"não consegui abrir o currículo de id {id_candidato}")
+
+    if salvar and DB_DISPONIVEL:
+        try:
+            db.upsert_candidatos([candidato])
+        except Exception:  # noqa: BLE001 — devolver o currículo importa mais que salvar
+            pass
+    return candidato
