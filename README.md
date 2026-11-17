@@ -141,12 +141,19 @@ normal, só sem esse dedup.
 
 ### Webhook — enviar os candidatos pra outro sistema
 
-Toda coleta concluída (`POST /coletar`) manda os candidatos coletados (já
-sem os que já foram usados) pra `WEBHOOK_URL` do `.env`, por exemplo um nó
-Webhook do n8n — **em lotes**, não tudo de uma vez: `WEBHOOK_BATCH_SIZE`
-(`.env`, padrão 20) define quantos candidatos vão por chamada, evitando um
-JSON gigante numa coleta grande. Dá pra sobrescrever por pedido com o campo
-`webhook_lote`. Cada lote é uma chamada POST separada:
+Toda coleta concluída (`POST /coletar` ou `POST /vagas/coletar`) manda os
+candidatos coletados (já sem os que já foram usados) pra `WEBHOOK_URL` do
+`.env`, por exemplo um nó Webhook do n8n — **em lotes**, não tudo de uma vez:
+`WEBHOOK_BATCH_SIZE` (`.env`) define quantos candidatos vão por chamada. Dá
+pra sobrescrever por pedido com o campo `webhook_lote`.
+
+**O padrão é 1 — um candidato por chamada.** A maioria dos fluxos de
+automação lê `candidatos[0]` e processa um por execução; com lote maior, um
+fluxo desses pega só o primeiro e **descarta o resto em silêncio** (o envio
+dá certo, então nada acusa erro). Só aumente se o outro lado souber iterar a
+lista inteira — no n8n, isso significa um nó *Split Out* sobre `candidatos`.
+
+Cada lote é uma chamada POST separada:
 
 ```json
 {

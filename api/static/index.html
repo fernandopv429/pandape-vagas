@@ -149,7 +149,16 @@
         <label>Limitar quantos currículos abrir</label>
         <input type="number" id="vagaLimiteDetalhes" min="1" placeholder="ex: 20">
       </div>
+      <div>
+        <label>Candidatos por envio ao webhook</label>
+        <input type="number" id="vagaWebhookLote" value="1" min="1" max="500">
+      </div>
     </div>
+    <p class="hint" style="margin:4px 0 0">
+      "Candidatos por envio" = quantos vão em cada chamada do webhook. Deixe em
+      <strong>1</strong> se o fluxo do outro lado trata um candidato por execução —
+      com valor maior, um fluxo assim processa só o primeiro e descarta o resto.
+    </p>
     <div class="checks">
       <label><input type="checkbox" id="vagaTodas"> Ignorar "páginas" e coletar todos os inscritos</label>
       <label><input type="checkbox" id="vagaComDetalhes" checked> Abrir currículo de cada inscrito</label>
@@ -404,6 +413,7 @@ async function coletarVaga() {
     somente_com_contato: $('vagaSomenteComContato').checked,
     excluir_usados: $('vagaExcluirUsados').checked,
     limite_detalhes: $('vagaLimiteDetalhes').value ? Number($('vagaLimiteDetalhes').value) : null,
+    webhook_lote: Number($('vagaWebhookLote').value) || 1,
   };
   setStatusVaga('Disparando coleta...');
   $('resultadoVaga').innerHTML = '';

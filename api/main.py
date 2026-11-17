@@ -74,7 +74,13 @@ API_KEY = os.environ.get("PANDAPE_API_KEY") or None
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL") or None
 # Quantos candidatos vão por chamada de webhook (padrão, pode ser sobrescrito
 # por pedido) — evita mandar um JSON gigante numa coleta grande de uma vez.
-WEBHOOK_BATCH_SIZE_PADRAO = int(os.environ.get("WEBHOOK_BATCH_SIZE", "20"))
+#
+# Padrão 1 (um candidato por chamada) de propósito: é o que fluxos de
+# automação costumam esperar, já que a maioria lê `candidatos[0]` e processa um
+# por execução. Com lote maior, um fluxo desses pega só o primeiro e descarta o
+# resto em silêncio — falha difícil de notar, porque o envio em si dá certo.
+# Só aumente se o outro lado souber iterar a lista inteira.
+WEBHOOK_BATCH_SIZE_PADRAO = int(os.environ.get("WEBHOOK_BATCH_SIZE", "1"))
 
 DB_DISPONIVEL = bool(db.DATABASE_URL)
 
