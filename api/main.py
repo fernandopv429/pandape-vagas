@@ -254,6 +254,13 @@ class ColetaVagaPedido(BaseModel):
         None, description="Quantos currículos abrir (null = todos os coletados)")
     somente_com_contato: bool = Field(
         True, description="Retornar só quem tem telefone/e-mail no currículo")
+    min_meses_contrato: int | None = Field(
+        None, ge=1, le=600,
+        description="Só quem teve ALGUM contrato de pelo menos N meses (ex: 7)")
+    max_meses_desde_saida: int | None = Field(
+        None, ge=1, le=600,
+        description="Só quem saiu de um emprego há no máximo N meses (ex: 24). "
+                    "Quem ainda está na empresa não entra, porque não há saída pra contar.")
     excluir_usados: bool = Field(
         True, description="Não devolver candidatos já marcados como usados com sucesso antes")
     webhook_lote: int = Field(
@@ -329,6 +336,8 @@ def _rodar_coleta_vaga(job_id: str, pedido: ColetaVagaPedido):
             com_detalhes=pedido.com_detalhes,
             limite_detalhes=pedido.limite_detalhes,
             somente_com_contato=pedido.somente_com_contato,
+            min_meses_contrato=pedido.min_meses_contrato,
+            max_meses_desde_saida=pedido.max_meses_desde_saida,
             storage_state=STORAGE_STATE,
             cdp=CDP,
             headless=HEADLESS,

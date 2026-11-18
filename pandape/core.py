@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 from contextlib import contextmanager
+from datetime import date
 from html import unescape
 from pathlib import Path
 from urllib.parse import quote
@@ -345,6 +346,97 @@ EXTRAIR_VAGAS_JS = r"""
   return { total_texto: elTotal ? limpar(elTotal.innerText) : null, vagas };
 }
 """
+
+
+# ------------------------------------------------------------------ período das experiências
+
+MESES_PT = {"jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6,
+            "jul": 7, "ago": 8, "set": 9, "out": 10, "nov": 11, "dez": 12}
+
+_PERIODO_EXPERIENCIA = re.compile(
+    r"^\s*([A-Za-zç]{3})\s+(\d{4})\s*-\s*"
+    r"(?:([A-Za-zç]{3})\s+(\d{4})|(Atual|o momento|Momento atual))",
+    re.IGNORECASE)
+
+
+def _meses_entre(inicio: date, fim: date) -> int:
+    return (fim.year - inicio.year) * 12 + (fim.month - inicio.month)
+
+
+def analisar_experiencia(texto: str, hoje: date | None = None) -> dict:
+    """Lê o período no começo do bloco de experiência e mede o que dá pra medir.
+
+    O Pandapé escreve sempre no formato "Abr 2025 - Mar 2026" ou
+    "Jan 2021 - Atual". Devolve início, fim, duração em meses e há quantos
+    meses a pessoa saiu — None quando não dá pra saber.
+
+    `periodo_suspeito` marca preenchimento impossível (ano 0001, fim antes do
+    início, data no futuro). Acontece: o candidato digita errado no Pandapé e
+    aparece coisa como "Jan 0001 - Atual (2025 anos e 10 meses)".
+    """
+    hoje = hoje or date.today()
+    info = {"inicio": None, "fim": None, "em_andamento": False,
+            "meses": None, "meses_desde_saida": None, "periodo_suspeito": False}
+
+    m = _PERIODO_EXPERIENCIA.match(texto or "")
+    if not m:
+        return info
+
+    mes_ini, ano_ini, mes_fim, ano_fim, em_curso = m.groups()
+    num_ini = MESES_PT.get(mes_ini.lower())
+    if not num_ini:
+        return info
+
+    ano_ini = int(ano_ini)
+    if ano_ini < 1940 or ano_ini > hoje.year:
+        info["periodo_suspeito"] = True
+        return info
+
+    inicio = date(ano_ini, num_ini, 1)
+    info["inicio"] = inicio.isoformat()
+
+    if em_curso:
+        info["em_andamento"] = True
+        info["meses"] = _meses_entre(inicio, hoje)
+        return info
+
+    num_fim = MESES_PT.get((mes_fim or "").lower())
+    ano_fim = int(ano_fim)
+    if not num_fim or ano_fim < 1940 or ano_fim > hoje.year + 1:
+        info["periodo_suspeito"] = True
+        return info
+
+    fim = date(ano_fim, num_fim, 1)
+    if fim < inicio:
+        info["periodo_suspeito"] = True
+        return info
+
+    info["fim"] = fim.isoformat()
+    info["meses"] = _meses_entre(inicio, fim)
+    info["meses_desde_saida"] = max(0, _meses_entre(fim, hoje))
+    return info
+
+
+def experiencia_atende(texto: str, min_meses=None, max_meses_desde_saida=None,
+                       hoje: date | None = None) -> bool:
+    """A experiência passa nos critérios de tempo de casa e de saída recente?
+
+    `max_meses_desde_saida` só faz sentido pra quem já saiu — quem continua na
+    empresa (`em_andamento`) não atende, porque não há data de saída pra contar.
+    Período ilegível também não atende: sem data confiável não dá pra afirmar
+    que o critério foi cumprido.
+    """
+    info = analisar_experiencia(texto, hoje=hoje)
+    if info["periodo_suspeito"] or info["inicio"] is None:
+        return False
+    if min_meses is not None and (info["meses"] or 0) < min_meses:
+        return False
+    if max_meses_desde_saida is not None:
+        if info["em_andamento"] or info["meses_desde_saida"] is None:
+            return False
+        if info["meses_desde_saida"] > max_meses_desde_saida:
+            return False
+    return True
 
 
 # ------------------------------------------------------------------ helpers de página
@@ -692,6 +784,18 @@ def _tem_contato(cand: dict) -> bool:
     return bool(det.get("telefones") or det.get("emails"))
 
 
+def _experiencia_relevante(registro: dict, min_meses=None, max_meses_desde_saida=None) -> bool:
+    """O candidato tem ALGUMA experiência que atenda aos critérios de tempo?
+
+    Basta uma — alguém com um bico de 2 meses e um emprego de 3 anos continua
+    interessante por causa do emprego.
+    """
+    if min_meses is None and max_meses_desde_saida is None:
+        return True
+    exps = ((registro.get("curriculo") or {}).get("experiencias")) or []
+    return any(experiencia_atende(e, min_meses, max_meses_desde_saida) for e in exps)
+
+
 def _estruturar(cand: dict) -> dict:
     """Achata o candidato num objeto limpo: dados principais + contato + currículo."""
     det = cand.get("detalhe") or {}
@@ -736,13 +840,20 @@ def _estruturar(cand: dict) -> dict:
         },
     }
     if det:
+        experiencias = det.get("experiencias") or []
         registro["curriculo"] = {
             "pretensao_salarial": det.get("pretensao_salarial"),
             "disponibilidade": det.get("disponibilidade"),
             "resumo": det.get("resumo"),
             "idiomas": det.get("idiomas") or [],
             "habilidades": det.get("habilidades"),
-            "experiencias": det.get("experiencias") or [],
+            "experiencias": experiencias,
+            # Mesma lista, com o período já lido (duração, saída, se é atual).
+            # Fica separada pra não mudar o formato de `experiencias`, que já
+            # é consumido por fora.
+            "experiencias_periodo": [
+                {"texto": e, **analisar_experiencia(e)} for e in experiencias
+            ],
             "formacao_completa": det.get("formacao"),
             "dados_pessoais": {
                 "genero": det.get("genero"),
@@ -807,6 +918,7 @@ def executar_coleta(palavras, paginas=1, por_pagina=100, todas=False, max_candid
 def executar_coleta_vaga(palavra_chave_vaga=None, id_vacancy=None, id_vacancy_folder=None,
                          paginas=1, por_pagina=10, todas=False, max_candidatos=1000,
                          com_detalhes=False, limite_detalhes=None, somente_com_contato=False,
+                         min_meses_contrato=None, max_meses_desde_saida=None,
                          storage_state=STORAGE_STATE, cdp=None, headless=True, progresso=None):
     """Coleta quem se candidatou a um processo seletivo (vaga) já publicado.
 
@@ -856,8 +968,19 @@ def executar_coleta_vaga(palavra_chave_vaga=None, id_vacancy=None, id_vacancy_fo
                             if c["contato"]["telefone"] or c["contato"]["email"]
                             or c["contato"]["whatsapp"]]
 
+        antes_experiencia = len(estruturados)
+        if min_meses_contrato is not None or max_meses_desde_saida is not None:
+            estruturados = [c for c in estruturados
+                            if _experiencia_relevante(c, min_meses_contrato,
+                                                      max_meses_desde_saida)]
+
         return {
             "id_vacancy": id_vacancy,
+            "filtro_experiencia": {
+                "min_meses_contrato": min_meses_contrato,
+                "max_meses_desde_saida": max_meses_desde_saida,
+                "descartados": antes_experiencia - len(estruturados),
+            } if (min_meses_contrato is not None or max_meses_desde_saida is not None) else None,
             "id_vacancy_folder": id_vacancy_folder,
             "vaga_titulo": vaga_usada["titulo"] if vaga_usada else None,
             "total_no_site": lista["total_texto"],

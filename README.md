@@ -123,6 +123,34 @@ curl -X POST http://localhost:8090/vagas/coletar \
 Dedup e webhook funcionam exatamente como em `/coletar` — mesmo banco,
 mesmos lotes.
 
+#### Filtrar por tempo de contrato e saída recente
+
+Dois campos opcionais olham as experiências do currículo e deixam passar só
+quem tiver **pelo menos uma** que atenda:
+
+```bash
+curl -X POST http://localhost:8090/vagas/coletar \
+  -H "X-API-Key: SUA_CHAVE" -H 'Content-Type: application/json' \
+  -d '{"palavra_chave_vaga": "Vigilante",
+       "com_detalhes": true,
+       "min_meses_contrato": 7,
+       "max_meses_desde_saida": 24}'
+```
+
+- `min_meses_contrato`: duração mínima do vínculo, em meses
+- `max_meses_desde_saida`: saiu do emprego há no máximo N meses
+
+Quem **continua na empresa** não passa no filtro de saída — não existe data
+de saída pra contar. Período ilegível também não passa: o Pandapé aceita o
+candidato digitar coisas como `Jan 0001 - Atual (2025 anos e 10 meses)`, e
+sem data confiável não dá pra afirmar que o critério foi cumprido.
+
+O resultado traz `filtro_experiencia.descartados` com quantos caíram, e cada
+candidato ganha `curriculo.experiencias_periodo` — a mesma lista de
+experiências com o período já lido (`meses`, `meses_desde_saida`,
+`em_andamento`, `periodo_suspeito`), útil pra decidir do outro lado sem ter
+que interpretar o texto.
+
 ### Pegar o currículo direto do Pandapé
 
 `/candidatos/buscar` lê o que já está salvo. Quando o candidato foi coletado
