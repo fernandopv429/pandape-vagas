@@ -218,10 +218,10 @@ function montarPedido() {
   return {
     palavra: $('palavra').value.split('\n').map(s => s.trim()).filter(Boolean),
     match: $('match').value,
-    paginas: Number($('paginas').value) || 1,
+    paginas: numeroDoCampo('paginas', 1),
     por_pagina: Number($('porPagina').value),
     todas: $('todas').checked,
-    max_candidatos: Number($('maxCandidatos').value) || 1000,
+    max_candidatos: numeroDoCampo('maxCandidatos', 1000),
     estado: listaOuNull($('estado').value),
     area: listaOuNull($('area').value),
     cargo: listaOuNull($('cargo').value)?.map(Number) || null,
@@ -229,9 +229,47 @@ function montarPedido() {
     somente_com_contato: $('somenteComContato').checked,
     somente_com_telefone: $('somenteComTelefone').checked,
     excluir_usados: $('excluirUsados').checked,
-    limite_detalhes: $('limiteDetalhes').value ? Number($('limiteDetalhes').value) : null,
-    ...($('webhookLote').value ? { webhook_lote: Number($('webhookLote').value) } : {}),
+    limite_detalhes: numeroOuNull('limiteDetalhes'),
+    ...($('webhookLote').value ? { webhook_lote: numeroDoCampo('webhookLote', 1) } : {}),
   };
+}
+
+// A API recusa pedido fora de faixa com 422 e uma LISTA de erros em `detail`.
+// Concatenar isso numa string dava "Erro: [object Object]" — o usuário via que
+// falhou mas não qual campo.
+function formatarErro(data) {
+  const detalhe = data && data.detail;
+  if (typeof detalhe === 'string') return detalhe;
+  if (Array.isArray(detalhe)) {
+    return detalhe.map(e => {
+      const campo = (e.loc || []).filter(x => x !== 'body').join('.') || 'pedido';
+      const recebido = e.input === undefined ? '' : ` (recebeu: ${JSON.stringify(e.input)})`;
+      return `${campo}: ${e.msg}${recebido}`;
+    }).join('\n');
+  }
+  return JSON.stringify(data);
+}
+
+// `min`/`max` no <input type=number> não impedem digitar fora da faixa quando o
+// envio é por fetch (não passa pela validação de formulário do navegador). Então
+// prende no limite do próprio campo e corrige o que está na tela, pra ficar
+// claro qual valor foi usado de verdade.
+function numeroDoCampo(id, padrao) {
+  const el = $(id);
+  const bruto = (el.value || '').trim();
+  if (!bruto) return padrao;
+  let n = Number(bruto);
+  if (!Number.isFinite(n)) return padrao;
+  const min = el.min === '' ? null : Number(el.min);
+  const max = el.max === '' ? null : Number(el.max);
+  if (min !== null && n < min) n = min;
+  if (max !== null && n > max) n = max;
+  if (String(n) !== bruto) el.value = n;
+  return n;
+}
+
+function numeroOuNull(id) {
+  return numeroDoCampo(id, null);
 }
 
 function setStatus(texto, erro) {
@@ -292,7 +330,7 @@ async function buscarRapido() {
   try {
     const res = await fetch('/buscar?' + qs.toString(), { headers: { 'X-API-Key': apiKey } });
     const data = await res.json();
-    if (!res.ok) return setStatus('Erro: ' + (data.detail || JSON.stringify(data)), true);
+    if (!res.ok) return setStatus('Erro: ' + formatarErro(data), true);
     setStatus('Pronto.');
     mostrarResultado(data);
   } catch (e) {
@@ -321,7 +359,7 @@ async function coletar() {
       body: JSON.stringify(montarPedido()),
     });
     const data = await res.json();
-    if (!res.ok) return setStatus('Erro: ' + (data.detail || JSON.stringify(data)), true);
+    if (!res.ok) return setStatus('Erro: ' + formatarErro(data), true);
     jobId = data.job_id;
   } catch (e) {
     return setStatus('Falha de conexão: ' + e.message, true);
@@ -357,7 +395,7 @@ async function buscarContatoSalvo() {
     const res = await fetch('/candidatos/buscar?' + new URLSearchParams({ contato: valor }),
       { headers: { 'X-API-Key': apiKey } });
     const rows = await res.json();
-    if (!res.ok) { alvo.innerHTML = `<p class="erro">Erro: ${rows.detail || JSON.stringify(rows)}</p>`; return; }
+    if (!res.ok) { alvo.innerHTML = `<p class="erro">Erro: ${formatarErro(rows)}</p>`; return; }
     if (!rows.length) { alvo.innerHTML = '<p>Nada encontrado no banco salvo.</p>'; return; }
     alvo.innerHTML = `<table><thead><tr><th>Nome/perfil</th><th>Cargo</th><th>Contato</th><th>Usado</th><th></th></tr></thead>
       <tbody>${rows.map(r => {
@@ -397,7 +435,7 @@ async function buscarProcessos() {
     const res = await fetch('/vagas/buscar?' + new URLSearchParams({ palavra_chave: palavra }),
       { headers: { 'X-API-Key': apiKey } });
     const data = await res.json();
-    if (!res.ok) { alvo.innerHTML = `<p class="erro">Erro: ${data.detail || JSON.stringify(data)}</p>`; return; }
+    if (!res.ok) { alvo.innerHTML = `<p class="erro">Erro: ${formatarErro(data)}</p>`; return; }
     const vagas = data.vagas || [];
     if (!vagas.length) { alvo.innerHTML = '<p>Nenhum processo encontrado com essa palavra.</p>'; return; }
     alvo.innerHTML = vagas.map((v, i) => `
@@ -422,17 +460,17 @@ async function coletarVaga() {
   const pedido = {
     id_vacancy: vagaEscolhida.idVacancy,
     id_vacancy_folder: vagaEscolhida.idVacancyFolder,
-    paginas: Number($('vagaPaginas').value) || 1,
-    por_pagina: Number($('vagaPorPagina').value) || 10,
+    paginas: numeroDoCampo('vagaPaginas', 1),
+    por_pagina: numeroDoCampo('vagaPorPagina', 10),
     todas: $('vagaTodas').checked,
     com_detalhes: $('vagaComDetalhes').checked,
     somente_com_contato: $('vagaSomenteComContato').checked,
     somente_com_telefone: $('vagaSomenteComTelefone').checked,
     excluir_usados: $('vagaExcluirUsados').checked,
-    limite_detalhes: $('vagaLimiteDetalhes').value ? Number($('vagaLimiteDetalhes').value) : null,
-    webhook_lote: Number($('vagaWebhookLote').value) || 1,
-    min_meses_contrato: $('vagaMinMeses').value ? Number($('vagaMinMeses').value) : null,
-    max_meses_desde_saida: $('vagaMaxSaida').value ? Number($('vagaMaxSaida').value) : null,
+    limite_detalhes: numeroOuNull('vagaLimiteDetalhes'),
+    webhook_lote: numeroDoCampo('vagaWebhookLote', 1),
+    min_meses_contrato: numeroOuNull('vagaMinMeses'),
+    max_meses_desde_saida: numeroOuNull('vagaMaxSaida'),
   };
   setStatusVaga('Disparando coleta...');
   $('resultadoVaga').innerHTML = '';
@@ -444,7 +482,7 @@ async function coletarVaga() {
       body: JSON.stringify(pedido),
     });
     const data = await res.json();
-    if (!res.ok) return setStatusVaga('Erro: ' + (data.detail || JSON.stringify(data)), true);
+    if (!res.ok) return setStatusVaga('Erro: ' + formatarErro(data), true);
     jobId = data.job_id;
   } catch (e) {
     return setStatusVaga('Falha de conexão: ' + e.message, true);
