@@ -817,28 +817,57 @@ def motivo_telefone_invalido(telefone) -> str | None:
     return "telefone fixo (não tem WhatsApp)"
 
 
-def _separar_telefones(telefones: list) -> tuple[list, list]:
-    """Divide em (os que servem pra WhatsApp, os descartados com o motivo)."""
-    bons, descartados = [], []
+def normalizar_telefone(telefone):
+    """Acrescenta o 9º dígito em celular antigo. Devolve (numero, corrigido?).
+
+    Entre 2013 e 2016 a Anatel pôs um 9 na frente de todo celular do país. O
+    currículo do Pandapé tem cadastro de antes disso que nunca foi atualizado:
+    `11-91247848` é o mesmo aparelho que hoje atende em `11-991247848`.
+
+    Só mexe em 8 dígitos começando em 6-9, que era a faixa de celular — fixo
+    (2-5) continua fixo, e não vira celular acrescentando dígito.
+    """
+    if not telefone:
+        return telefone, False
+    casa = re.fullmatch(r"(\d{2})-(\d{8})", telefone.strip())
+    if not casa or casa.group(2)[0] not in "6789":
+        return telefone, False
+    candidato = f"{casa.group(1)}-9{casa.group(2)}"
+    # Só aceita a correção se o resultado realmente passar a valer — assim um
+    # DDD inexistente continua sendo descartado em vez de virar número "bom".
+    if motivo_telefone_invalido(candidato) is not None:
+        return telefone, False
+    return candidato, True
+
+
+def _separar_telefones(telefones: list) -> tuple[list, list, list]:
+    """Divide em (os que servem pra WhatsApp, os descartados, os corrigidos)."""
+    bons, descartados, corrigidos = [], [], []
     for tel in telefones:
-        motivo = motivo_telefone_invalido(tel)
+        numero, foi_corrigido = normalizar_telefone(tel)
+        motivo = motivo_telefone_invalido(numero)
         if motivo is None:
-            bons.append(tel)
+            if numero in bons:
+                continue  # a correção pode colidir com um número que já veio certo
+            bons.append(numero)
+            if foi_corrigido:
+                corrigidos.append({"de": tel, "para": numero,
+                                   "motivo": "celular antigo, acrescentado o 9º dígito"})
         else:
             descartados.append({"numero": tel, "motivo": motivo})
-    return bons, descartados
+    return bons, descartados, corrigidos
 
 
 def _tem_contato(cand: dict) -> bool:
     """True se o candidato tem telefone, e-mail ou WhatsApp (na lista ou no detalhe)."""
     if cand.get("email") or cand.get("whatsapp"):
         return True
-    if motivo_telefone_invalido(cand.get("telefone")) is None:
+    if motivo_telefone_invalido(normalizar_telefone(cand.get("telefone"))[0]) is None:
         return True
     det = cand.get("detalhe") or {}
     if det.get("emails"):
         return True
-    bons, _ = _separar_telefones(det.get("telefones") or [])
+    bons, _, _ = _separar_telefones(det.get("telefones") or [])
     return bool(bons)
 
 
@@ -865,7 +894,7 @@ def _estruturar(cand: dict) -> dict:
     # `telefones` e vai pra `telefones_descartados` com o motivo — assim o
     # consumidor do webhook nunca pega um número morto como se fosse bom, e
     # ninguém perde a informação de que o candidato tinha ESSE número.
-    telefones_bons, telefones_descartados = _separar_telefones(telefones)
+    telefones_bons, telefones_descartados, telefones_corrigidos = _separar_telefones(telefones)
 
     emails = list(det.get("emails") or [])
     if cand.get("email") and cand["email"] not in emails:
@@ -900,6 +929,7 @@ def _estruturar(cand: dict) -> dict:
             "whatsapp": cand.get("whatsapp"),
             "telefones": telefones_bons,
             "telefones_descartados": telefones_descartados,
+            "telefones_corrigidos": telefones_corrigidos,
             "emails": emails,
             "bloqueado": det.get("contato_bloqueado", not (telefones or emails)),
         },

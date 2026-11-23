@@ -126,17 +126,27 @@ mesmos lotes.
 #### Telefone que não recebe WhatsApp
 
 O Pandapé aceita qualquer coisa no campo de telefone, então vem fixo, DDD que
-não existe (`00-000000000`), `11-00000000` e celular antigo de 8 dígitos (de
-antes do 9º dígito). Nenhum desses recebe mensagem.
+não existe (`00-000000000`) e `11-00000000`. Nenhum desses recebe mensagem.
 
-A coleta separa os dois grupos em `contato`:
+Celular antigo de 8 dígitos é caso à parte: entre 2013 e 2016 a Anatel pôs um 9
+na frente de todo celular do país, e tem currículo cadastrado antes disso que
+nunca foi atualizado. `11-91247848` é o mesmo aparelho que hoje atende em
+`11-991247848`, então a coleta **corrige** em vez de descartar — só na faixa que
+era de celular (8 dígitos começando em 6-9) e só quando o resultado passa a
+valer de fato. Fixo não vira celular ganhando um dígito.
+
+A coleta separa os grupos em `contato`:
 
 ```json
 "contato": {
   "telefone": "11-965063185",
-  "telefones": ["11-965063185"],
+  "telefones": ["11-965063185", "11-991247848"],
   "telefones_descartados": [
     {"numero": "11-00000000", "motivo": "dígitos repetidos (preencheu o campo de qualquer jeito)"}
+  ],
+  "telefones_corrigidos": [
+    {"de": "11-91247848", "para": "11-991247848",
+     "motivo": "celular antigo, acrescentado o 9º dígito"}
   ]
 }
 ```
