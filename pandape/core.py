@@ -776,12 +776,70 @@ def abrir_browser(storage_state=STORAGE_STATE, cdp=None, headless=True):
                 browser.close()
 
 
+# DDDs que existem de fato no Brasil. O Pandapé aceita qualquer coisa no campo
+# de telefone, então aparece DDD inventado (00, 10, 20...) em currículo real.
+DDDS_VALIDOS = {
+    11, 12, 13, 14, 15, 16, 17, 18, 19,
+    21, 22, 24, 27, 28,
+    31, 32, 33, 34, 35, 37, 38,
+    41, 42, 43, 44, 45, 46, 47, 48, 49,
+    51, 53, 54, 55,
+    61, 62, 63, 64, 65, 66, 67, 68, 69,
+    71, 73, 74, 75, 77, 79,
+    81, 82, 83, 84, 85, 86, 87, 88, 89,
+    91, 92, 93, 94, 95, 96, 97, 98, 99,
+}
+
+
+def motivo_telefone_invalido(telefone) -> str | None:
+    """Por que esse telefone NÃO serve pra mandar WhatsApp — ou None se serve.
+
+    O destino dos candidatos é um disparo de WhatsApp, então "válido" aqui quer
+    dizer celular brasileiro no formato atual (DD + 9 dígitos começando em 9).
+    Fixo e celular antigo (8 dígitos, de antes do 9º dígito) são número real de
+    gente real, mas não recebem mensagem — mandar pra eles queima o lead no
+    dedup sem ninguém ser contatado.
+    """
+    if not telefone:
+        return "vazio"
+    casa = re.fullmatch(r"(\d{2})-(\d{8,9})", telefone.strip())
+    if not casa:
+        return "fora do formato DD-NNNNNNNNN"
+    ddd, numero = int(casa.group(1)), casa.group(2)
+    if ddd not in DDDS_VALIDOS:
+        return f"DDD {ddd:02d} não existe"
+    if len(set(numero)) == 1:
+        return "dígitos repetidos (preencheu o campo de qualquer jeito)"
+    if len(numero) == 9:
+        return None if numero[0] == "9" else "9 dígitos mas não começa com 9 (não é celular)"
+    if numero[0] in "6789":
+        return "celular antigo, sem o 9º dígito"
+    return "telefone fixo (não tem WhatsApp)"
+
+
+def _separar_telefones(telefones: list) -> tuple[list, list]:
+    """Divide em (os que servem pra WhatsApp, os descartados com o motivo)."""
+    bons, descartados = [], []
+    for tel in telefones:
+        motivo = motivo_telefone_invalido(tel)
+        if motivo is None:
+            bons.append(tel)
+        else:
+            descartados.append({"numero": tel, "motivo": motivo})
+    return bons, descartados
+
+
 def _tem_contato(cand: dict) -> bool:
     """True se o candidato tem telefone, e-mail ou WhatsApp (na lista ou no detalhe)."""
-    if cand.get("telefone") or cand.get("email") or cand.get("whatsapp"):
+    if cand.get("email") or cand.get("whatsapp"):
+        return True
+    if motivo_telefone_invalido(cand.get("telefone")) is None:
         return True
     det = cand.get("detalhe") or {}
-    return bool(det.get("telefones") or det.get("emails"))
+    if det.get("emails"):
+        return True
+    bons, _ = _separar_telefones(det.get("telefones") or [])
+    return bool(bons)
 
 
 def _experiencia_relevante(registro: dict, min_meses=None, max_meses_desde_saida=None) -> bool:
@@ -803,6 +861,12 @@ def _estruturar(cand: dict) -> dict:
     telefones = list(det.get("telefones") or [])
     if cand.get("telefone") and cand["telefone"] not in telefones:
         telefones.insert(0, cand["telefone"])
+    # Telefone que não recebe WhatsApp (fixo, DDD inventado, 00000000) sai de
+    # `telefones` e vai pra `telefones_descartados` com o motivo — assim o
+    # consumidor do webhook nunca pega um número morto como se fosse bom, e
+    # ninguém perde a informação de que o candidato tinha ESSE número.
+    telefones_bons, telefones_descartados = _separar_telefones(telefones)
+
     emails = list(det.get("emails") or [])
     if cand.get("email") and cand["email"] not in emails:
         emails.insert(0, cand["email"])
@@ -831,10 +895,11 @@ def _estruturar(cand: dict) -> dict:
         "atualizado_em": cand.get("ultima_atualizacao"),
         "link_curriculo": cand.get("link_curriculo"),
         "contato": {
-            "telefone": telefones[0] if telefones else None,
+            "telefone": telefones_bons[0] if telefones_bons else None,
             "email": emails[0] if emails else None,
             "whatsapp": cand.get("whatsapp"),
-            "telefones": telefones,
+            "telefones": telefones_bons,
+            "telefones_descartados": telefones_descartados,
             "emails": emails,
             "bloqueado": det.get("contato_bloqueado", not (telefones or emails)),
         },
@@ -868,10 +933,15 @@ def _estruturar(cand: dict) -> dict:
 def executar_coleta(palavras, paginas=1, por_pagina=100, todas=False, max_candidatos=1000,
                     match="AllWords", escopo="AllFields", filtros=None, com_detalhes=False,
                     limite_detalhes=None, somente_com_contato=False,
+                    somente_com_telefone=False,
                     storage_state=STORAGE_STATE, cdp=None, headless=True, progresso=None):
     """Coleta completa gerenciando o próprio browser. Retorna dict estruturado.
 
     somente_com_contato: descarta candidatos sem telefone/e-mail/WhatsApp.
+    somente_com_telefone: mais estrito — exige celular que receba WhatsApp
+    (ver `motivo_telefone_invalido`). Use quando o destino é disparo de
+    mensagem: quem só tem e-mail ou telefone fixo não dá pra contatar, e
+    mandar assim mesmo só serve pra queimar o lead no dedup.
     """
     with abrir_browser(storage_state=storage_state, cdp=cdp, headless=headless) as context:
         busca = coletar_busca(context, palavras, paginas=paginas, por_pagina=por_pagina,
@@ -901,9 +971,13 @@ def executar_coleta(palavras, paginas=1, por_pagina=100, todas=False, max_candid
             estruturados = [c for c in estruturados
                             if c["contato"]["telefone"] or c["contato"]["email"]
                             or c["contato"]["whatsapp"]]
+        antes_telefone = len(estruturados)
+        if somente_com_telefone:
+            estruturados = [c for c in estruturados if c["contato"]["telefone"]]
 
         return {
             "palavras": palavras,
+            "sem_telefone_valido": antes_telefone - len(estruturados) if somente_com_telefone else None,
             "total_no_site": busca["total_texto"],
             "coletados": coletados,
             "com_contato": sum(1 for c in estruturados
@@ -918,6 +992,7 @@ def executar_coleta(palavras, paginas=1, por_pagina=100, todas=False, max_candid
 def executar_coleta_vaga(palavra_chave_vaga=None, id_vacancy=None, id_vacancy_folder=None,
                          paginas=1, por_pagina=10, todas=False, max_candidatos=1000,
                          com_detalhes=False, limite_detalhes=None, somente_com_contato=False,
+                         somente_com_telefone=False,
                          min_meses_contrato=None, max_meses_desde_saida=None,
                          storage_state=STORAGE_STATE, cdp=None, headless=True, progresso=None):
     """Coleta quem se candidatou a um processo seletivo (vaga) já publicado.
@@ -967,6 +1042,9 @@ def executar_coleta_vaga(palavra_chave_vaga=None, id_vacancy=None, id_vacancy_fo
             estruturados = [c for c in estruturados
                             if c["contato"]["telefone"] or c["contato"]["email"]
                             or c["contato"]["whatsapp"]]
+        antes_telefone = len(estruturados)
+        if somente_com_telefone:
+            estruturados = [c for c in estruturados if c["contato"]["telefone"]]
 
         antes_experiencia = len(estruturados)
         if min_meses_contrato is not None or max_meses_desde_saida is not None:
@@ -976,6 +1054,7 @@ def executar_coleta_vaga(palavra_chave_vaga=None, id_vacancy=None, id_vacancy_fo
 
         return {
             "id_vacancy": id_vacancy,
+            "sem_telefone_valido": antes_telefone - antes_experiencia if somente_com_telefone else None,
             "filtro_experiencia": {
                 "min_meses_contrato": min_meses_contrato,
                 "max_meses_desde_saida": max_meses_desde_saida,

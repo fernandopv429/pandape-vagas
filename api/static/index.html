@@ -100,6 +100,7 @@
       <div class="checks">
         <label><input type="checkbox" id="comDetalhes" checked> Abrir perfil de cada candidato</label>
         <label><input type="checkbox" id="somenteComContato" checked> Só com telefone/e-mail</label>
+        <label title="Descarta fixo, DDD que não existe, 00000000 e celular antigo sem o 9º dígito — números que nunca recebem a mensagem"><input type="checkbox" id="somenteComTelefone"> Só com celular que recebe WhatsApp</label>
         <label><input type="checkbox" id="excluirUsados" checked> Não repetir quem já foi usado</label>
       </div>
       <div class="row">
@@ -176,6 +177,7 @@
       <label><input type="checkbox" id="vagaTodas"> Ignorar "páginas" e coletar todos os inscritos</label>
       <label><input type="checkbox" id="vagaComDetalhes" checked> Abrir currículo de cada inscrito</label>
       <label><input type="checkbox" id="vagaSomenteComContato" checked> Só com telefone/e-mail</label>
+      <label title="Descarta fixo, DDD que não existe, 00000000 e celular antigo sem o 9º dígito — números que nunca recebem a mensagem"><input type="checkbox" id="vagaSomenteComTelefone" checked> Só com celular que recebe WhatsApp</label>
       <label><input type="checkbox" id="vagaExcluirUsados" checked> Não repetir quem já foi usado</label>
     </div>
     <button type="button" id="btnColetarVaga" style="margin-top:10px" disabled>Coletar inscritos</button>
@@ -225,6 +227,7 @@ function montarPedido() {
     cargo: listaOuNull($('cargo').value)?.map(Number) || null,
     com_detalhes: $('comDetalhes').checked,
     somente_com_contato: $('somenteComContato').checked,
+    somente_com_telefone: $('somenteComTelefone').checked,
     excluir_usados: $('excluirUsados').checked,
     limite_detalhes: $('limiteDetalhes').value ? Number($('limiteDetalhes').value) : null,
     ...($('webhookLote').value ? { webhook_lote: Number($('webhookLote').value) } : {}),
@@ -424,6 +427,7 @@ async function coletarVaga() {
     todas: $('vagaTodas').checked,
     com_detalhes: $('vagaComDetalhes').checked,
     somente_com_contato: $('vagaSomenteComContato').checked,
+    somente_com_telefone: $('vagaSomenteComTelefone').checked,
     excluir_usados: $('vagaExcluirUsados').checked,
     limite_detalhes: $('vagaLimiteDetalhes').value ? Number($('vagaLimiteDetalhes').value) : null,
     webhook_lote: Number($('vagaWebhookLote').value) || 1,

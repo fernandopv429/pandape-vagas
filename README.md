@@ -123,6 +123,43 @@ curl -X POST http://localhost:8090/vagas/coletar \
 Dedup e webhook funcionam exatamente como em `/coletar` — mesmo banco,
 mesmos lotes.
 
+#### Telefone que não recebe WhatsApp
+
+O Pandapé aceita qualquer coisa no campo de telefone, então vem fixo, DDD que
+não existe (`00-000000000`), `11-00000000` e celular antigo de 8 dígitos (de
+antes do 9º dígito). Nenhum desses recebe mensagem.
+
+A coleta separa os dois grupos em `contato`:
+
+```json
+"contato": {
+  "telefone": "11-965063185",
+  "telefones": ["11-965063185"],
+  "telefones_descartados": [
+    {"numero": "11-00000000", "motivo": "dígitos repetidos (preencheu o campo de qualquer jeito)"}
+  ]
+}
+```
+
+`telefone` é sempre o primeiro número que **de fato** recebe WhatsApp, não o
+primeiro da lista — antes disso, um `00000000` na frente virava o número do
+disparo mesmo quando o candidato tinha celular bom logo em seguida. O número
+ruim não some: fica em `telefones_descartados` com o motivo.
+
+Quem fica **sem nenhum** celular válido ainda passa em `somente_com_contato`
+(e-mail também é contato). Para disparo de WhatsApp isso não serve, então ligue
+`somente_com_telefone` — aí só sai quem dá pra contatar de verdade, e o
+candidato não é queimado no dedup à toa:
+
+```bash
+-d '{"palavra_chave_vaga": "Vigilante", "com_detalhes": true,
+     "somente_com_telefone": true}'
+# -> resposta traz "sem_telefone_valido": 3  (quantos foram descartados por isso)
+```
+
+Na tela, é a opção **"Só com celular que recebe WhatsApp"** — já vem marcada na
+seção de vagas (que alimenta o disparo) e desmarcada na busca geral.
+
 #### Filtrar por tempo de contrato e saída recente
 
 Dois campos opcionais olham as experiências do currículo e deixam passar só
