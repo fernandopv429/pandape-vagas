@@ -37,6 +37,10 @@ echo "[entrypoint] subindo x11vnc (porta 5900, com senha)..."
 x11vnc -display "$DISPLAY" -forever -shared -rfbport 5900 -passwd "$VNC_PASSWORD" &
 
 echo "[entrypoint] subindo noVNC em :6080..."
+# O pacote noVNC do Debian não traz index.html — só vnc.html. Sem isso, abrir a
+# raiz do domínio devolve a listagem de arquivos do diretório em vez da tela do
+# navegador remoto, e parece que o serviço está quebrado.
+ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html
 websockify --web=/usr/share/novnc 6080 localhost:5900 &
 
 echo "[entrypoint] subindo API em :8090..."
